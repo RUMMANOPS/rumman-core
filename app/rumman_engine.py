@@ -176,11 +176,18 @@ async def historical_backfill(client):
             if not dialog.is_group and not dialog.is_channel:
                 continue
 
-            print(f"\nBACKFILL_CHAT: {dialog.name}")
+            print(f"\nBACKFILL_CHAT: {dialog.name}", flush=True)
 
             chat_type = "channel" if dialog.is_channel else "group"
+            seen_count = 0
+            error_count = 0
 
             async for msg in client.iter_messages(dialog.entity, limit=get_backfill_limit()):
+                seen_count += 1
+
+                if seen_count == 1 or seen_count % 100 == 0:
+                    print(f"BACKFILL_PROGRESS | chat={dialog.name} | seen={seen_count}", flush=True)
+
                 try:
                     await process_message(
                         http=http,
@@ -191,7 +198,10 @@ async def historical_backfill(client):
                         source="backfill"
                     )
                 except Exception as e:
-                    print("BACKFILL_ERROR", str(e))
+                    error_count += 1
+                    print(f"BACKFILL_ERROR | chat={dialog.name} | seen={seen_count} | error={str(e)}", flush=True)
+
+            print(f"BACKFILL_CHAT_DONE | chat={dialog.name} | seen={seen_count} | errors={error_count}", flush=True)
 
     print("\nBACKFILL_COMPLETE\n")
 

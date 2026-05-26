@@ -197,6 +197,7 @@ async def historical_backfill(client):
 
 async def main():
     print("\nRUMMAN ENGINE STARTING...\n")
+    print(f"BACKFILL_LIMIT_ACTIVE: {BACKFILL_LIMIT} | EFFECTIVE_LIMIT: {get_backfill_limit()}")
 
     client = TelegramClient(
         StringSession(os.environ["TELEGRAM_SESSION_STRING"]),

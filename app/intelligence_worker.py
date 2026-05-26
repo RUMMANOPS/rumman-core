@@ -5,7 +5,7 @@ import httpx
 from openai import AsyncOpenAI
 
 SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_ROLE_KEY"]
+SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 

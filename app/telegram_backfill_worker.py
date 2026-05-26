@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 import httpx
 from dotenv import load_dotenv
@@ -12,6 +12,7 @@ load_dotenv()
 
 WORKER_ID = os.getenv("WORKER_ID", "telegram-backfill-worker-1")
 BATCH_SLEEP_SECONDS = int(os.getenv("BACKFILL_SLEEP_SECONDS", "3"))
+LEASE_MINUTES = int(os.getenv("BACKFILL_LEASE_MINUTES", "10"))
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
@@ -26,6 +27,10 @@ HEADERS = {
 
 def utc_now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def lease_until():
+    return (datetime.now(timezone.utc) + timedelta(minutes=LEASE_MINUTES)).isoformat()
 
 
 def message_type(msg):
@@ -96,7 +101,41 @@ async def rest_patch(http, table, filters, payload):
     return True
 
 
+async def release_stale_running_jobs(http):
+    now = utc_now()
+
+    rows = await rest_get(
+        http,
+        "telegram_backfill_jobs",
+        {
+            "status": "eq.running",
+            "lease_expires_at": f"lt.{now}",
+            "select": "id,chat_name,worker_id,lease_expires_at",
+        },
+    )
+
+    for job in rows:
+        await rest_patch(
+            http,
+            "telegram_backfill_jobs",
+            {"id": f"eq.{job['id']}"},
+            {
+                "status": "pending",
+                "worker_id": None,
+                "locked_at": None,
+                "lease_expires_at": None,
+                "updated_at": utc_now(),
+            },
+        )
+        print(
+            f"STALE_JOB_RELEASED | id={job['id']} | chat={job.get('chat_name')} | old_worker={job.get('worker_id')}",
+            flush=True,
+        )
+
+
 async def claim_job(http):
+    await release_stale_running_jobs(http)
+
     rows = await rest_get(
         http,
         "telegram_backfill_jobs",
@@ -116,13 +155,17 @@ async def claim_job(http):
     ok = await rest_patch(
         http,
         "telegram_backfill_jobs",
-        {"id": f"eq.{job['id']}"},
+        {
+            "id": f"eq.{job['id']}",
+            "status": "eq.pending",
+        },
         {
             "status": "running",
             "worker_id": WORKER_ID,
             "locked_at": utc_now(),
-            "started_at": utc_now(),
+            "started_at": job.get("started_at") or utc_now(),
             "heartbeat_at": utc_now(),
+            "lease_expires_at": lease_until(),
             "updated_at": utc_now(),
         },
     )
@@ -130,8 +173,46 @@ async def claim_job(http):
     if not ok:
         return None
 
-    print(f"JOB_CLAIMED | id={job['id']} | chat={job.get('chat_name')} | chat_id={job['platform_chat_id']}", flush=True)
-    return job
+    fresh = await rest_get(
+        http,
+        "telegram_backfill_jobs",
+        {
+            "id": f"eq.{job['id']}",
+            "worker_id": f"eq.{WORKER_ID}",
+            "status": "eq.running",
+            "limit": "1",
+        },
+    )
+
+    if not fresh:
+        print("JOB_CLAIM_LOST", flush=True)
+        return None
+
+    claimed = fresh[0]
+
+    print(
+        f"JOB_CLAIMED | id={claimed['id']} | chat={claimed.get('chat_name')} | chat_id={claimed['platform_chat_id']}",
+        flush=True,
+    )
+
+    return claimed
+
+
+async def heartbeat(http, job_id):
+    await rest_patch(
+        http,
+        "telegram_backfill_jobs",
+        {
+            "id": f"eq.{job_id}",
+            "worker_id": f"eq.{WORKER_ID}",
+            "status": "eq.running",
+        },
+        {
+            "heartbeat_at": utc_now(),
+            "lease_expires_at": lease_until(),
+            "updated_at": utc_now(),
+        },
+    )
 
 
 async def build_payload(msg, chat_name, chat_type, chat_id):
@@ -149,11 +230,17 @@ async def build_payload(msg, chat_name, chat_type, chat_id):
         "platform_username": getattr(sender, "username", None) if sender else None,
         "platform_user_first_name": getattr(sender, "first_name", None) if sender else None,
         "sender_name": (
-            " ".join(filter(None, [
-                getattr(sender, "first_name", None),
-                getattr(sender, "last_name", None),
-            ]))
-            if sender else None
+            " ".join(
+                filter(
+                    None,
+                    [
+                        getattr(sender, "first_name", None),
+                        getattr(sender, "last_name", None),
+                    ],
+                )
+            )
+            if sender
+            else None
         ),
         "message_text": msg.message or "",
         "message_type": mt,
@@ -185,15 +272,22 @@ async def update_job_progress(http, job, processed, last_id, oldest_id, done=Fal
     if done:
         payload["status"] = "completed"
         payload["completed_at"] = utc_now()
+        payload["locked_at"] = None
+        payload["worker_id"] = None
+        payload["lease_expires_at"] = None
     else:
         payload["status"] = "pending"
         payload["locked_at"] = None
         payload["worker_id"] = None
+        payload["lease_expires_at"] = None
 
     await rest_patch(
         http,
         "telegram_backfill_jobs",
-        {"id": f"eq.{job['id']}"},
+        {
+            "id": f"eq.{job['id']}",
+            "worker_id": f"eq.{WORKER_ID}",
+        },
         payload,
     )
 
@@ -202,13 +296,19 @@ async def fail_job(http, job, error):
     await rest_patch(
         http,
         "telegram_backfill_jobs",
-        {"id": f"eq.{job['id']}"},
+        {
+            "id": f"eq.{job['id']}",
+            "worker_id": f"eq.{WORKER_ID}",
+        },
         {
             "status": "failed",
             "error_message": str(error),
             "retry_count": (job.get("retry_count") or 0) + 1,
             "heartbeat_at": utc_now(),
             "updated_at": utc_now(),
+            "locked_at": None,
+            "worker_id": None,
+            "lease_expires_at": None,
         },
     )
 
@@ -233,7 +333,10 @@ async def process_job(client, http, job):
     if max_id:
         kwargs["max_id"] = int(max_id)
 
-    print(f"BACKFILL_BATCH_START | chat={chat_name} | max_id={max_id} | limit={batch_size}", flush=True)
+    print(
+        f"BACKFILL_BATCH_START | chat={chat_name} | max_id={max_id} | limit={batch_size}",
+        flush=True,
+    )
 
     async for msg in client.iter_messages(entity, **kwargs):
         processed += 1
@@ -247,6 +350,13 @@ async def process_job(client, http, job):
             inserted += 1
         elif result == "duplicate":
             duplicate += 1
+
+        if processed % 100 == 0:
+            await heartbeat(http, job["id"])
+            print(
+                f"BACKFILL_PROGRESS | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate}",
+                flush=True,
+            )
 
     done = processed == 0
 
@@ -263,6 +373,9 @@ async def process_job(client, http, job):
         f"BACKFILL_BATCH_DONE | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | done={done}",
         flush=True,
     )
+
+    if BATCH_SLEEP_SECONDS > 0:
+        await asyncio.sleep(BATCH_SLEEP_SECONDS)
 
 
 async def main():
@@ -282,6 +395,7 @@ async def main():
         job = await claim_job(http)
 
         if not job:
+            await client.disconnect()
             return
 
         try:

@@ -10,7 +10,10 @@ from telethon.sessions import StringSession
 
 load_dotenv()
 
-LIMIT_PER_CHAT = 20
+BACKFILL_LIMIT = int(os.getenv("BACKFILL_LIMIT", "20"))
+
+def get_backfill_limit():
+    return None if BACKFILL_LIMIT == 0 else BACKFILL_LIMIT
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
@@ -177,7 +180,7 @@ async def historical_backfill(client):
 
             chat_type = "channel" if dialog.is_channel else "group"
 
-            async for msg in client.iter_messages(dialog.entity, limit=LIMIT_PER_CHAT):
+            async for msg in client.iter_messages(dialog.entity, limit=get_backfill_limit()):
                 try:
                     await process_message(
                         http=http,

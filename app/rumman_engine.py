@@ -22,6 +22,7 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
+
 def message_type(msg):
     if getattr(msg, "poll", None):
         return "poll"
@@ -41,6 +42,7 @@ def message_type(msg):
         return "text"
     return "other"
 
+
 def file_meta(msg):
     f = getattr(msg, "file", None)
     return {
@@ -49,11 +51,12 @@ def file_meta(msg):
         "size_bytes": getattr(f, "size", None),
     }
 
+
 async def post(http, table, payload):
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/{table}",
         headers=HEADERS,
-        json=payload
+        json=payload,
     )
 
     if r.status_code == 409:
@@ -65,30 +68,63 @@ async def post(http, table, payload):
 
     return "inserted"
 
+
+async def get_current_sync_state(http, platform_chat_id):
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
+        headers=HEADERS,
+        params={
+            "platform_chat_id": f"eq.{platform_chat_id}",
+            "select": "total_messages_seen,oldest_message_id,newest_message_id",
+            "limit": "1",
+        },
+    )
+
+    if r.status_code >= 400:
+        print("SYNC_STATE_READ_ERROR", r.status_code, r.text)
+        return None
+
+    rows = r.json()
+    return rows[0] if rows else None
+
+
 async def update_sync_state(http, payload):
+    current = await get_current_sync_state(http, payload["platform_chat_id"])
+
+    current_total = 0
+    current_oldest = None
+
+    if current:
+        current_total = current.get("total_messages_seen") or 0
+        current_oldest = current.get("oldest_message_id")
+
+    message_id = int(payload["platform_message_id"])
+
     sync_payload = {
         "platform_chat_id": payload["platform_chat_id"],
         "chat_type": payload["telegram_chat_type"],
         "chat_name": payload["chat_name"],
         "backfill_completed": False,
-        "newest_message_id": int(payload["platform_message_id"]),
-        "total_messages_seen": 1,
+        "oldest_message_id": current_oldest,
+        "newest_message_id": message_id,
+        "total_messages_seen": current_total + 1,
     }
 
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
         headers={
             **HEADERS,
-            "Prefer": "resolution=merge-duplicates"
+            "Prefer": "resolution=merge-duplicates,return=representation",
         },
         params={
-            "on_conflict": "platform_chat_id"
+            "on_conflict": "platform_chat_id",
         },
-        json=sync_payload
+        json=sync_payload,
     )
 
     if r.status_code >= 400:
         print("SYNC_STATE_ERROR", r.status_code, r.text)
+
 
 async def build_payload(msg, chat_name, chat_type, chat_id, source):
     sender = await msg.get_sender()
@@ -106,11 +142,17 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
         "platform_username": getattr(sender, "username", None) if sender else None,
         "platform_user_first_name": getattr(sender, "first_name", None) if sender else None,
         "sender_name": (
-            " ".join(filter(None, [
-                getattr(sender, "first_name", None),
-                getattr(sender, "last_name", None),
-            ]))
-            if sender else None
+            " ".join(
+                filter(
+                    None,
+                    [
+                        getattr(sender, "first_name", None),
+                        getattr(sender, "last_name", None),
+                    ],
+                )
+            )
+            if sender
+            else None
         ),
         "message_text": msg.message or "",
         "message_type": mt,
@@ -129,6 +171,7 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
         },
     }
 
+
 async def process_message(http, msg, chat_name, chat_type, chat_id, source):
     payload = await build_payload(msg, chat_name, chat_type, chat_id, source)
 
@@ -144,8 +187,10 @@ async def process_message(http, msg, chat_name, chat_type, chat_id, source):
     if result == "inserted":
         await update_sync_state(http, payload)
 
+
 async def historical_backfill(client):
     print("\nBACKFILL DISABLED\n")
+
 
 async def main():
     print("\nRUMMAN ENGINE STARTING...\n")
@@ -153,7 +198,7 @@ async def main():
     client = TelegramClient(
         StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
         int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"]
+        os.environ["TELEGRAM_API_HASH"],
     )
 
     await client.start()
@@ -188,7 +233,7 @@ async def main():
                     chat_name=chat_name,
                     chat_type=chat_type,
                     chat_id=event.chat_id,
-                    source="live"
+                    source="live",
                 )
 
         except Exception as e:
@@ -202,5 +247,6 @@ async def main():
     print("\nLIVE LISTENER ACTIVE\n")
 
     await client.run_until_disconnected()
+
 
 asyncio.run(main())

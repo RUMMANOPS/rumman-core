@@ -10,10 +10,7 @@ from telethon.sessions import StringSession
 
 load_dotenv()
 
-BACKFILL_LIMIT = int(os.getenv("BACKFILL_LIMIT", "20"))
-
-def get_backfill_limit():
-    return None if BACKFILL_LIMIT == 0 else BACKFILL_LIMIT
+ENABLE_BACKFILL = False
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
@@ -58,59 +55,44 @@ async def post(http, table, payload):
         headers=HEADERS,
         json=payload
     )
+
     if r.status_code == 409:
         return "duplicate"
+
     if r.status_code >= 400:
         print(f"{table.upper()}_ERROR", r.status_code, r.text)
         return "error"
+
     return "inserted"
 
-async def create_job(http, job_type, target_table, target_key, payload=None, priority=50):
-    job = {
-        "job_type": job_type,
-        "target_table": target_table,
-        "target_key": str(target_key),
-        "priority": priority,
-        "payload": payload or {},
-    }
-    result = await post(http, "processing_jobs", job)
-    if result == "inserted":
-        print(f"JOB_CREATED | {job_type} | {target_key}")
-
-async def register_media(http, payload):
-    if not payload["has_media"]:
-        return
-
-    media = {
-        "message_platform": payload["platform"],
+async def update_sync_state(http, payload):
+    sync_payload = {
         "platform_chat_id": payload["platform_chat_id"],
-        "platform_message_id": payload["platform_message_id"],
-        "media_type": payload["media_type"],
-        "file_name": payload.get("file_name"),
-        "mime_type": payload.get("mime_type"),
-        "size_bytes": payload.get("metadata", {}).get("size_bytes"),
-        "download_status": "pending",
-        "extraction_status": "pending",
-        "metadata": {
-            "chat_name": payload["chat_name"],
-            "source": payload["metadata"].get("source"),
-        },
+        "chat_type": payload["telegram_chat_type"],
+        "chat_name": payload["chat_name"],
+        "backfill_completed": False,
+        "newest_message_id": int(payload["platform_message_id"]),
+        "total_messages_seen": 1,
     }
 
-    result = await post(http, "media_files", media)
+    r = await http.post(
+        f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
+        headers={
+            **HEADERS,
+            "Prefer": "resolution=merge-duplicates"
+        },
+        params={
+            "on_conflict": "platform_chat_id"
+        },
+        json=sync_payload
+    )
 
-    if result == "inserted":
-        print(f"MEDIA_REGISTERED | {media['media_type']} | {media['platform_message_id']}")
-
-        if media["media_type"] in ["photo", "gif", "video"]:
-            await create_job(http, "vision_extract", "media_files", media["platform_message_id"], media, priority=60)
-        elif media["media_type"] in ["voice", "audio"]:
-            await create_job(http, "audio_transcribe", "media_files", media["platform_message_id"], media, priority=70)
-        else:
-            await create_job(http, "file_parse", "media_files", media["platform_message_id"], media, priority=55)
+    if r.status_code >= 400:
+        print("SYNC_STATE_ERROR", r.status_code, r.text)
 
 async def build_payload(msg, chat_name, chat_type, chat_id, source):
     sender = await msg.get_sender()
+
     mt = message_type(msg)
     fm = file_meta(msg)
 
@@ -144,7 +126,6 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
             "source": source,
             "size_bytes": fm["size_bytes"],
             "is_forward": bool(getattr(msg, "fwd_from", None)),
-            "forwarded_from": str(getattr(msg, "fwd_from", None)) if getattr(msg, "fwd_from", None) else None,
         },
     }
 
@@ -161,53 +142,13 @@ async def process_message(http, msg, chat_name, chat_type, chat_id, source):
     )
 
     if result == "inserted":
-        await create_job(http, "message_ingested", "messages", payload["platform_message_id"], {
-            "message_type": payload["message_type"],
-            "has_media": payload["has_media"],
-            "source": source,
-        })
-        await register_media(http, payload)
+        await update_sync_state(http, payload)
 
 async def historical_backfill(client):
-    print("\nSTARTING_BACKFILL\n")
-
-    async with httpx.AsyncClient(timeout=30) as http:
-        async for dialog in client.iter_dialogs():
-            if not dialog.is_group and not dialog.is_channel:
-                continue
-
-            print(f"\nBACKFILL_CHAT: {dialog.name}", flush=True)
-
-            chat_type = "channel" if dialog.is_channel else "group"
-            seen_count = 0
-            error_count = 0
-
-            async for msg in client.iter_messages(dialog.entity, limit=get_backfill_limit()):
-                seen_count += 1
-
-                if seen_count == 1 or seen_count % 100 == 0:
-                    print(f"BACKFILL_PROGRESS | chat={dialog.name} | seen={seen_count}", flush=True)
-
-                try:
-                    await process_message(
-                        http=http,
-                        msg=msg,
-                        chat_name=dialog.name,
-                        chat_type=chat_type,
-                        chat_id=dialog.entity.id,
-                        source="backfill"
-                    )
-                except Exception as e:
-                    error_count += 1
-                    print(f"BACKFILL_ERROR | chat={dialog.name} | seen={seen_count} | error={str(e)}", flush=True)
-
-            print(f"BACKFILL_CHAT_DONE | chat={dialog.name} | seen={seen_count} | errors={error_count}", flush=True)
-
-    print("\nBACKFILL_COMPLETE\n")
+    print("\nBACKFILL DISABLED\n")
 
 async def main():
     print("\nRUMMAN ENGINE STARTING...\n")
-    print(f"BACKFILL_LIMIT_ACTIVE: {BACKFILL_LIMIT} | EFFECTIVE_LIMIT: {get_backfill_limit()}")
 
     client = TelegramClient(
         StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
@@ -216,15 +157,29 @@ async def main():
     )
 
     await client.start()
+
     me = await client.get_me()
+
     print(f"LOGGED_IN: {me.id}")
 
     @client.on(events.NewMessage)
     async def new_message_handler(event):
         try:
             chat = await event.get_chat()
-            chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "Unknown"
-            chat_type = "private" if event.is_private else "channel" if event.is_channel else "group"
+
+            chat_name = (
+                getattr(chat, "title", None)
+                or getattr(chat, "first_name", None)
+                or "Unknown"
+            )
+
+            chat_type = (
+                "private"
+                if event.is_private
+                else "channel"
+                if event.is_channel
+                else "group"
+            )
 
             async with httpx.AsyncClient(timeout=30) as http:
                 await process_message(
@@ -235,26 +190,14 @@ async def main():
                     chat_id=event.chat_id,
                     source="live"
                 )
+
         except Exception as e:
             print("LIVE_ERROR", str(e))
 
-    @client.on(events.MessageEdited)
-    async def edited_message_handler(event):
-        try:
-            chat = await event.get_chat()
-            chat_name = getattr(chat, "title", None) or getattr(chat, "first_name", None) or "Unknown"
-            print(f"EDIT_DETECTED | {chat_name} | {event.message.id}")
-
-            async with httpx.AsyncClient(timeout=30) as http:
-                await create_job(http, "message_edited", "messages", event.message.id, {
-                    "platform_message_id": str(event.message.id),
-                    "message_text": event.message.message or "",
-                }, priority=80)
-
-        except Exception as e:
-            print("EDIT_ERROR", str(e))
-
-    await historical_backfill(client)
+    if ENABLE_BACKFILL:
+        await historical_backfill(client)
+    else:
+        print("\nHISTORICAL BACKFILL DISABLED\n")
 
     print("\nLIVE LISTENER ACTIVE\n")
 

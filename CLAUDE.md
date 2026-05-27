@@ -6,7 +6,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 RUMMAN is an **Operational Intelligence OS**, not a chatbot. Current phase per `docs/06-roadmap/roadmap.md` is **Phase 1: Memory/Data Spine** — stabilize ingestion before turning on intelligence. The system ingests Telegram traffic into Supabase, where it will eventually become the operational memory for a multi-tenant SaaS platform (ADR-0004).
 
-`docs/` is the **source of truth** per ADR-0003 — read the relevant doc before changing architecture, and update docs when decisions change. ADRs in `docs/02-adrs/` are authoritative.
+`docs/` is the **source of truth** per ADR-0003. Before making architectural changes, read:
+1. `docs/philosophy/vocabulary.md` — precise definitions of load-bearing terms (claim, evidence, machine-asserted, provenance)
+2. `docs/philosophy/core-principles.md` — the beliefs that shape all design decisions
+3. `docs/constraints/hard-boundaries.md` — rules that must not be broken
+4. The relevant ADR in `docs/02-adrs/`
+
+**Documentation governance:** `docs/philosophy/` and `docs/constraints/` are **invariant** — never modify autonomously. `docs/01-architecture/` is maintained — AI may draft, human approves. See `docs/README.md` for the full governance model.
 
 ## Runtime Topology
 

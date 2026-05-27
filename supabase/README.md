@@ -11,9 +11,10 @@ Schema changes for RUMMAN's Supabase database.
 
 ## Migrations
 
-| File | Tables created | Required by |
+| File | Tables / columns | Required by |
 |---|---|---|
 | `001_daily_brief_tables.sql` | `brief_runs`, `extracted_items` | `app/daily_brief.py` |
+| `002_processing_jobs_retry_count.sql` | `processing_jobs.retry_count` | `app/audio_worker.py` |
 
 ## Why not Supabase CLI
 

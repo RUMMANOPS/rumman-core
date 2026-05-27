@@ -1,15 +1,43 @@
+"""
+intelligence_worker.py — DISABLED. NOT SAFE TO RUN.
+
+This worker has three unresolved problems that make it economically dangerous:
+
+  1. NO CURSOR TRACKING — fetches the same 20 rows every 30 seconds. The same
+     messages are re-processed indefinitely: 2,880+ LLM calls per hour at steady state.
+
+  2. NO DEDUPLICATION — intelligence_items has no idempotency key. Each run inserts
+     duplicate rows for the same messages.
+
+  3. NO COST CEILING — no per-tenant or per-run budget check before API calls.
+
+DO NOT add this to the Procfile or run it manually until all three are resolved.
+DO NOT set INTELLIGENCE_WORKER_ENABLED=true in any environment until:
+  - cursor/watermark tracking is implemented
+  - source_message_id uniqueness is enforced in intelligence_items
+  - a cost ceiling is implemented and tested
+
+See docs/constraints/hard-boundaries.md and the AI runtime audit for full context.
+Estimated worst-case cost if enabled today: $50–$200+/month on low traffic.
+"""
+
 import os
 import asyncio
 import json
 import httpx
 from openai import AsyncOpenAI
 
-SUPABASE_URL = os.environ["SUPABASE_URL"]
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+# Hard gate — must be explicitly set to "true" to allow this worker to run.
+# The default is disabled. Setting this to true without resolving the issues
+# above is an explicit choice to accept the cost risk.
+_ENABLED = os.getenv("INTELLIGENCE_WORKER_ENABLED", "").strip().lower() == "true"
 
-client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+# Client is intentionally not initialized at module level — credentials are only
+# required when the worker is actually enabled.
+client = None
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -104,7 +132,19 @@ async def analyze_message(http, msg):
         print("INTELLIGENCE_ERROR", str(e))
 
 async def main():
-    print("RUMMAN INTELLIGENCE WORKER STARTED")
+    if not _ENABLED:
+        print(
+            "INTELLIGENCE_WORKER_DISABLED | "
+            "set INTELLIGENCE_WORKER_ENABLED=true to override | "
+            "read module docstring for required preconditions before enabling",
+            flush=True,
+        )
+        return
+
+    global client
+    client = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+    print("INTELLIGENCE_WORKER_START | WARNING: cursor/dedup/cost-ceiling not implemented", flush=True)
 
     async with httpx.AsyncClient(timeout=60) as http:
         while True:
@@ -115,7 +155,7 @@ async def main():
                     await analyze_message(http, msg)
 
             except Exception as e:
-                print("WORKER_ERROR", str(e))
+                print(f"WORKER_ERROR | error={str(e)}", flush=True)
 
             await asyncio.sleep(30)
 

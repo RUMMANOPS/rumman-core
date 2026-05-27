@@ -14,6 +14,8 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
+MAX_RETRIES = 5  # jobs with retry_count >= this are abandoned (never picked up again)
+
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -21,25 +23,29 @@ HEADERS = {
 }
 
 async def get_jobs(http):
+    # retry_count filter requires processing_jobs.retry_count column (int, default 0)
     r = await http.get(
         f"{SUPABASE_URL}/rest/v1/processing_jobs",
         headers=HEADERS,
         params={
             "job_type": "eq.audio_transcribe",
             "status": "in.(pending,failed)",
+            "retry_count": f"lt.{MAX_RETRIES}",
             "limit": "20",
-            "order": "created_at.asc"
+            "order": "created_at.asc",
         }
     )
     r.raise_for_status()
     return r.json()
 
-async def update_job(http, job_id, status, result=None, error=None):
+async def update_job(http, job_id, status, result=None, error=None, retry_count=None):
     payload = {"status": status}
-    if result:
+    if result is not None:
         payload["result"] = result
-    if error:
+    if error is not None:
         payload["error"] = error
+    if retry_count is not None:
+        payload["retry_count"] = retry_count
 
     r = await http.patch(
         f"{SUPABASE_URL}/rest/v1/processing_jobs?id=eq.{job_id}",
@@ -47,7 +53,7 @@ async def update_job(http, job_id, status, result=None, error=None):
         json=payload
     )
     if r.status_code >= 400:
-        print("UPDATE_JOB_ERROR", r.status_code, r.text)
+        print(f"UPDATE_JOB_ERROR | id={job_id} | status={r.status_code} | body={r.text[:120]}", flush=True)
 
 async def update_media(http, platform_chat_id, platform_message_id, text):
     r = await http.patch(
@@ -87,14 +93,18 @@ async def transcribe(file_path):
 async def process_job(client, http, job):
     job_id = job["id"]
     payload = job.get("payload") or {}
+    retry_count = (job.get("retry_count") or 0)
 
     platform_chat_id = payload.get("platform_chat_id")
     platform_message_id = payload.get("platform_message_id")
 
     if not platform_chat_id or not platform_message_id:
-        print("INVALID_JOB_PAYLOAD")
-        await update_job(http, job_id, "failed", error="Missing platform ids")
+        print(f"INVALID_JOB_PAYLOAD | id={job_id}", flush=True)
+        await update_job(http, job_id, "failed", error="Missing platform ids",
+                         retry_count=retry_count + 1)
         return
+
+    print(f"JOB_START | id={job_id} | chat_id={platform_chat_id} | msg_id={platform_message_id} | attempt={retry_count + 1}", flush=True)
 
     try:
         await update_job(http, job_id, "processing")
@@ -111,17 +121,16 @@ async def process_job(client, http, job):
             if not file_path:
                 raise RuntimeError("download failed")
 
-            print("DOWNLOADED", file_path)
+            print(f"DOWNLOADED | id={job_id} | path={file_path}", flush=True)
 
             if str(file_path).endswith(".oga"):
                 new_path = str(file_path)[:-4] + ".ogg"
                 Path(file_path).rename(new_path)
                 file_path = new_path
-                print("RENAMED_TO_OGG", file_path)
 
             text = await transcribe(file_path)
 
-            print("TRANSCRIBED", text[:200])
+            print(f"TRANSCRIBED | id={job_id} | chars={len(text)}", flush=True)
 
             await update_media(http, platform_chat_id, platform_message_id, text)
 
@@ -129,15 +138,22 @@ async def process_job(client, http, job):
                 http,
                 job_id,
                 "processed",
-                result={"transcript": text}
+                result={"transcript": text, "char_count": len(text)},
             )
 
+            print(f"JOB_DONE | id={job_id} | chat_id={platform_chat_id} | msg_id={platform_message_id}", flush=True)
+
     except Exception as e:
-        print("TRANSCRIBE_ERROR", str(e))
-        await update_job(http, job_id, "failed", error=str(e))
+        new_retry_count = retry_count + 1
+        abandoned = new_retry_count >= MAX_RETRIES
+        print(
+            f"JOB_FAILED | id={job_id} | attempt={new_retry_count} | abandoned={abandoned} | error={str(e)[:120]}",
+            flush=True,
+        )
+        await update_job(http, job_id, "failed", error=str(e), retry_count=new_retry_count)
 
 async def main():
-    print("AUDIO_WORKER_STARTING", flush=True)
+    print("AUDIO_WORKER_START", flush=True)
 
     client = TelegramClient(
         StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
@@ -145,7 +161,6 @@ async def main():
         os.environ["TELEGRAM_API_HASH"]
     )
 
-    print("CONNECTING_TELEGRAM", flush=True)
     await asyncio.wait_for(client.connect(), timeout=30)
 
     if not await client.is_user_authorized():
@@ -153,7 +168,7 @@ async def main():
         return
 
     me = await client.get_me()
-    print("AUDIO_WORKER_LOGGED_IN", me.id, flush=True)
+    print(f"AUDIO_WORKER_READY | user_id={me.id} | max_retries={MAX_RETRIES}", flush=True)
 
     async with httpx.AsyncClient(timeout=60) as http:
         while True:
@@ -163,6 +178,7 @@ async def main():
                 await asyncio.sleep(3)
                 continue
 
+            print(f"JOBS_FETCHED | count={len(jobs)}", flush=True)
             for job in jobs:
                 await process_job(client, http, job)
 

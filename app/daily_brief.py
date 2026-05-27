@@ -375,6 +375,7 @@ async def process_chat(
             "chat_name": chat_name,
             "context_summary": summary,
             "items": above_threshold,
+            "cost_usd": cost_usd,
         }
 
     except Exception as e:
@@ -385,7 +386,7 @@ async def process_chat(
                 "error": str(e),
                 "completed_at": utc_now(),
             })
-        return {"chat_name": chat_name, "items": [], "error": str(e)}
+        return {"chat_name": chat_name, "items": [], "error": str(e), "cost_usd": 0.0}
 
 
 async def main():
@@ -444,7 +445,11 @@ async def main():
         print(format_brief(results))
 
         total_items = sum(len(r.get("items", [])) for r in results)
-        log("DAILY_BRIEF_DONE", chats_processed=len(results), total_items=total_items)
+        total_cost = sum(r.get("cost_usd", 0.0) for r in results)
+        log("DAILY_BRIEF_DONE",
+            chats_processed=len(results),
+            total_items=total_items,
+            total_cost_usd=f"${total_cost:.4f}")
 
 
 if __name__ == "__main__":

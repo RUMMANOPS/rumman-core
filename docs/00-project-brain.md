@@ -36,4 +36,12 @@ Separate fast live ingestion from heavy historical backfill.
 
 ## Architecture Direction
 
-RUMMAN should evolve into a stateful, observable, resumable, and scalable operational intelligence platform.
+RUMMAN is evolving into a three-layer Operational Intelligence Platform:
+
+- Layer 1 (Data Spine): ingestion, synchronization, raw artifact storage, job queues, operational state
+- Layer 2 (Knowledge Layer): OCR, transcription, document extraction, semantic chunking, embeddings, entity graph
+- Layer 3 (Intelligence Layer): reasoning, agents, memory synthesis, operational copilots
+
+Current code is entirely Layer 1. Layer 2 must be designed and scaffolded before Layer 3 is enabled.
+
+See ADR-0005 for the formal layering decision.

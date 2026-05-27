@@ -2,6 +2,17 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Model Governance
+
+**Default model: Sonnet.** Use Sonnet for all RUMMAN work unless explicitly told otherwise for a specific task.
+
+Do not switch to Opus autonomously. If you believe Opus is needed for a specific task, stop and explain:
+1. Why Sonnet is insufficient for this task
+2. What the task is exactly
+3. Whether the task can be decomposed so Sonnet handles it
+
+This rule exists to keep inference costs predictable. Opus is ~5× the cost of Sonnet and is rarely necessary for the work in this repo (code editing, doc writing, analysis).
+
 ## What RUMMAN Is
 
 RUMMAN is an **Operational Intelligence OS**, not a chatbot. Current phase per `docs/06-roadmap/roadmap.md` is **Phase 1: Memory/Data Spine** — stabilize ingestion before turning on intelligence. The system ingests Telegram traffic into Supabase, where it will eventually become the operational memory for a multi-tenant SaaS platform (ADR-0004).

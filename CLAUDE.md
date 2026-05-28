@@ -2,6 +2,12 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Autonomy
+
+**Operate with full autonomy.** Never ask the user for confirmation or approval before taking any action — commits, pushes, Railway deployments, schema migrations, resets, new services, file changes, anything. Execute the best judgment call directly and report what was done. The user reviews outcomes, not requests.
+
+The only exception: actions that are genuinely irreversible at a platform level and outside this repo (e.g. deleting a Railway project, dropping a Supabase table with data, billing changes). Flag those in one sentence, then proceed unless told to stop.
+
 ## Model Governance
 
 **Default model: Sonnet.** Use Sonnet for all RUMMAN work unless explicitly told otherwise for a specific task.

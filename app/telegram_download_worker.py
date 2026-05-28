@@ -39,7 +39,8 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 MAX_RETRIES = 5
-SLEEP_SECONDS = 3
+SLEEP_SECONDS  = 3
+PARALLEL_JOBS  = 10   # concurrent OCR/download tasks per fetch cycle
 INSTITUTION = "SEU"
 VISION_MODEL = "gpt-4o"
 MAX_VISION_PAGES = 10
@@ -102,7 +103,7 @@ async def get_pending_jobs(http: httpx.AsyncClient) -> list[dict]:
             "job_type":    "in.(audio_transcribe,telegram_media)",
             "status":      "in.(pending,failed)",
             "retry_count": f"lt.{MAX_RETRIES}",
-            "limit":       "5",
+            "limit":       str(PARALLEL_JOBS),
             "order":       "created_at.asc",
         },
     )
@@ -455,7 +456,8 @@ async def main():
                         continue
 
                     log("JOBS_FETCHED", count=len(jobs))
-                    for job in jobs:
+
+                    async def dispatch(job):
                         jtype = job.get("job_type")
                         if jtype == "audio_transcribe":
                             await handle_audio_transcribe(client, http, job)
@@ -463,6 +465,8 @@ async def main():
                             await handle_telegram_media(client, ai, http, job)
                         else:
                             log("UNKNOWN_JOB_TYPE", job_type=jtype, id=job["id"])
+
+                    await asyncio.gather(*[dispatch(j) for j in jobs])
 
         except AuthKeyDuplicatedError:
             log("AUTH_KEY_DUPLICATED_retry_in", seconds=CONNECT_RETRY_SECONDS)

@@ -285,9 +285,11 @@ def build_search_params(
     """
     Translate QueryUnderstanding into one or more SearchParams.
 
-    Always runs a broad (no-filter) search to handle corpus content in a
-    different language from the query (e.g. English course material, Arabic query).
-    When filters are present, also runs a targeted filtered search and merges.
+    Course-specific queries: search only within that course (lower threshold
+    applied downstream — see MIN_SIMILARITY_COURSE in search_api.py). Avoids
+    returning content from other courses that happens to be more similar.
+
+    General queries (no course code): broad search, standard threshold.
 
     Always returns at least one SearchParams (never empty list).
     """
@@ -302,21 +304,22 @@ def build_search_params(
     source_type  = intent.source_type_filter
     intent_query = intent.normalized_text or normalized
 
-    searches: list[SearchParams] = []
-
-    # 1. Broad search (no filters) — always included; catches cross-language content
-    searches.append(SearchParams(query=intent_query, course_code=None, source_type=None, limit=limit))
-
-    # 2. Filtered search — when course or type filter is available
-    if course_code or source_type:
-        searches.append(SearchParams(
+    # Course-specific query → course-only search (no broad fallback; different
+    # courses' content must not bleed in even at higher similarity)
+    if course_code:
+        return [SearchParams(
             query=intent_query,
             course_code=course_code,
             source_type=source_type,
             limit=limit,
-        ))
+        )]
 
-    # 3. Low confidence: also search on original normalized text if different
+    # No course code → broad search
+    searches: list[SearchParams] = [
+        SearchParams(query=intent_query, course_code=None, source_type=source_type, limit=limit)
+    ]
+
+    # Low confidence: also try original normalized text if different
     if intent.confidence < 0.65 and intent_query != normalized:
         searches.append(SearchParams(query=normalized, course_code=None, source_type=None, limit=limit))
 

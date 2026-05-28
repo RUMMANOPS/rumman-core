@@ -56,7 +56,8 @@ HEADERS = {
     "Content-Type":  "application/json",
 }
 
-MIN_SIMILARITY = 0.45
+MIN_SIMILARITY        = 0.45  # broad search — no course filter
+MIN_SIMILARITY_COURSE = 0.25  # course-filtered search — lower ok, scope already constrained
 
 
 # ---------------------------------------------------------------------------
@@ -211,17 +212,20 @@ async def search(req: SearchRequest):
             embedding = resp.data[0].embedding
             fetch_count = min(params.limit * 3, 150)
 
+            threshold = MIN_SIMILARITY_COURSE if params.course_code else MIN_SIMILARITY
             raw = await _retrieve(http, embedding, params.course_code, params.source_type, fetch_count)
-            all_raw.extend(raw)
+            for row in raw:
+                if (row.get("similarity") or 0) >= threshold:
+                    row["_threshold_used"] = threshold
+                    all_raw.append(row)
             params_log.append({
                 "query": q,
                 "course_code": params.course_code,
                 "source_type": params.source_type,
             })
 
-    # Step 5: anti-hallucination gate + dedup
-    filtered = [row for row in all_raw if (row.get("similarity") or 0) >= MIN_SIMILARITY]
-    results  = _deduplicate(filtered, req.limit)
+    # Step 5: anti-hallucination gate already applied per-pass above; dedup
+    results = _deduplicate(all_raw, req.limit)
 
     top_sim  = results[0].get("similarity") if results else None
     grounded = len(results) > 0

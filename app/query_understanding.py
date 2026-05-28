@@ -285,16 +285,16 @@ def build_search_params(
     """
     Translate QueryUnderstanding into one or more SearchParams.
 
-    Single search  — when intent confidence ≥ 0.65 (targeted, fast).
-    Multi-search   — when confidence < 0.65 (run original + structured variants,
-                     caller merges and deduplicates results).
+    Always runs a broad (no-filter) search to handle corpus content in a
+    different language from the query (e.g. English course material, Arabic query).
+    When filters are present, also runs a targeted filtered search and merges.
 
     Always returns at least one SearchParams (never empty list).
     """
     intent = understanding.intent
     normalized = understanding.query_normalized
 
-    # No classifier result → plain search on normalized query
+    # No classifier result → plain broad search
     if intent is None:
         return [SearchParams(query=normalized, course_code=None, source_type=None, limit=limit)]
 
@@ -302,23 +302,13 @@ def build_search_params(
     source_type  = intent.source_type_filter
     intent_query = intent.normalized_text or normalized
 
-    # High confidence → single targeted search
-    if intent.confidence >= 0.65:
-        return [SearchParams(
-            query=intent_query,
-            course_code=course_code,
-            source_type=source_type,
-            limit=limit,
-        )]
+    searches: list[SearchParams] = []
 
-    # Low confidence → multi-search: union of broader and narrower queries
-    searches = []
+    # 1. Broad search (no filters) — always included; catches cross-language content
+    searches.append(SearchParams(query=intent_query, course_code=None, source_type=None, limit=limit))
 
-    # 1. Normalized text, no filters (broad)
-    searches.append(SearchParams(query=normalized, course_code=None, source_type=None, limit=limit))
-
-    # 2. Intent-rewritten text with filters (targeted)
-    if intent_query != normalized or course_code or source_type:
+    # 2. Filtered search — when course or type filter is available
+    if course_code or source_type:
         searches.append(SearchParams(
             query=intent_query,
             course_code=course_code,
@@ -326,18 +316,11 @@ def build_search_params(
             limit=limit,
         ))
 
-    # 3. Intent text, course filter only (mid-specificity)
-    if course_code and source_type:
-        searches.append(SearchParams(
-            query=intent_query,
-            course_code=course_code,
-            source_type=None,
-            limit=limit,
-        ))
+    # 3. Low confidence: also search on original normalized text if different
+    if intent.confidence < 0.65 and intent_query != normalized:
+        searches.append(SearchParams(query=normalized, course_code=None, source_type=None, limit=limit))
 
-    return searches if searches else [
-        SearchParams(query=normalized, course_code=None, source_type=None, limit=limit)
-    ]
+    return searches
 
 
 # ---------------------------------------------------------------------------

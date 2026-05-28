@@ -7,6 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.types import PeerChannel, PeerChat, PeerUser
 
 load_dotenv()
 
@@ -370,13 +371,24 @@ async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict,
         await create_processing_job(http, "telegram_media", {**base, "media_type": "image"})
 
 
+async def resolve_entity(client: TelegramClient, chat_id: int, chat_type: str):
+    """Resolve a Telegram entity using the correct peer type.
+    IDs stored without the -100 prefix must be resolved as PeerChannel,
+    not PeerUser, or Telethon will fail to find the entity."""
+    if chat_type in ("channel", "megagroup"):
+        return await client.get_entity(PeerChannel(chat_id))
+    if chat_type == "group":
+        return await client.get_entity(PeerChat(chat_id))
+    return await client.get_entity(chat_id)
+
+
 async def process_job(client, http, job):
     chat_id = int(job["platform_chat_id"])
     chat_name = job.get("chat_name") or "Unknown"
     chat_type = job.get("chat_type") or "unknown"
     batch_size = job.get("batch_size") or 500
 
-    entity = await client.get_entity(chat_id)
+    entity = await resolve_entity(client, chat_id, chat_type)
 
     max_id = job.get("oldest_reached_message_id") or job.get("last_processed_message_id")
 

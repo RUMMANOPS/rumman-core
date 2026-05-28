@@ -184,6 +184,7 @@ async def create_embed_job(http: httpx.AsyncClient, source_document_id: str) -> 
             "status": "pending",
             "payload": {"source_document_id": source_document_id},
             "retry_count": 0,
+            "target_table": "document_chunks",
         },
     )
     if r.status_code >= 400:

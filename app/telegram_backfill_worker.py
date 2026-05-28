@@ -324,11 +324,25 @@ def is_image(mt: str, fm: dict) -> bool:
     return mt == "photo" or mime.startswith("image/")
 
 
+JOB_TARGET_TABLE = {
+    "telegram_media":  "source_documents",
+    "audio_transcribe": "media_files",
+    "embed_chunk":     "document_chunks",
+    "pdf_extract":     "source_documents",
+}
+
+
 async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload: dict) -> bool:
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/processing_jobs",
         headers=HEADERS,
-        json={"job_type": job_type, "status": "pending", "payload": payload, "retry_count": 0},
+        json={
+            "job_type": job_type,
+            "status": "pending",
+            "payload": payload,
+            "retry_count": 0,
+            "target_table": JOB_TARGET_TABLE.get(job_type, "messages"),
+        },
     )
     if r.status_code == 409:
         return True  # already queued

@@ -1,0 +1,70 @@
+{
+  "_meta": {
+    "version": "2026-05-28",
+    "description": "Static keyword hints that bias the intent classifier before it calls the LLM. A triggered hint is passed as context to the classifier prompt — it confirms/overrides based on full query. Multiple patterns can trigger; all are passed. Triggers are checked against the post-normalization query."
+  },
+
+  "patterns": [
+    {
+      "id": "exam_topics",
+      "triggers": [
+        "اختبار", "امتحان", "ميدترم", "فاينل", "فينال", "كويز",
+        "يجي", "يطلع", "يجيب", "جاب", "طلع",
+        "تجميع", "تجميعات",
+        "اسئلة", "أسئلة", "سؤال", "مسائل",
+        "منهج", "مقرر الاختبار", "مادة الاختبار"
+      ],
+      "bias_intent": "exam_topics",
+      "bias_source_type": "exam"
+    },
+    {
+      "id": "resource",
+      "triggers": [
+        "ملخص", "ملخصات", "نوتس", "نوتز",
+        "سلايد", "سلايدات", "سلايدز", "بوربوينت",
+        "شرح", "شروحات",
+        "كتاب", "كتب",
+        "مذكرة", "مذكرات",
+        "محاضرة", "محاضرات",
+        "مواد", "مصادر"
+      ],
+      "bias_intent": "resource",
+      "bias_source_type": "study_plan"
+    },
+    {
+      "id": "deadline",
+      "triggers": [
+        "تسليم", "موعد", "ديدلاين", "deadline",
+        "تاريخ التسليم", "آخر موعد",
+        "متى التسليم", "امتى التسليم",
+        "اسايمنت", "برجكت", "واجب", "مشروع"
+      ],
+      "bias_intent": "deadline",
+      "bias_source_type": null
+    },
+    {
+      "id": "course_info",
+      "triggers": [
+        "خطة", "خطط دراسية",
+        "مقررات", "مساقات",
+        "ساعات", "ساعة معتمدة",
+        "متطلب", "متطلبات",
+        "وصف المقرر", "وصف الكورس",
+        "كيف اسجل", "تسجيل"
+      ],
+      "bias_intent": "course_info",
+      "bias_source_type": "study_plan"
+    },
+    {
+      "id": "exam_schedule",
+      "triggers": [
+        "موعد الاختبار", "موعد الامتحان",
+        "امتى الاختبار", "متى الاختبار",
+        "تاريخ الاختبار", "جدول الاختبارات",
+        "توقيت الاختبار"
+      ],
+      "bias_intent": "exam_schedule",
+      "bias_source_type": null
+    }
+  ]
+}

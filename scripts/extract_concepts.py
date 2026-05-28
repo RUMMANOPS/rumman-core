@@ -251,21 +251,28 @@ async def run_association(
     log.info("ASSOCIATION_START | min_sim=%.2f top_k=%d dry_run=%s", min_sim, top_k, dry_run)
     ai = AsyncOpenAI(api_key=OPENAI_KEY)
 
+    concepts: list[dict] = []
     async with httpx.AsyncClient(timeout=30) as http:
-        # Fetch all concepts for this tenant
-        r = await http.get(
-            f"{SUPABASE_URL}/rest/v1/concepts",
-            headers=HEADERS,
-            params={
-                "tenant_id": f"eq.{SEU_TENANT_ID}",
-                "select":    "id,canonical_name,subject_area",
-                "limit":     "2000",
-            },
-        )
-        if r.status_code >= 400:
-            log.error("fetch_concepts_failed: %s", r.text[:200])
-            return 0
-        concepts = r.json()
+        # Paginate past PostgREST's 1000-row default cap
+        for offset in range(0, 10000, 500):
+            r = await http.get(
+                f"{SUPABASE_URL}/rest/v1/concepts",
+                headers={**HEADERS, "Range-Unit": "items", "Range": f"{offset}-{offset+499}"},
+                params={
+                    "tenant_id": f"eq.{SEU_TENANT_ID}",
+                    "select":    "id,canonical_name,subject_area",
+                    "order":     "canonical_name",
+                },
+            )
+            if r.status_code >= 400:
+                log.error("fetch_concepts_failed: %s", r.text[:200])
+                return 0
+            batch = r.json()
+            if not batch:
+                break
+            concepts.extend(batch)
+            if len(batch) < 500:
+                break
     log.info("CONCEPTS_LOADED | count=%d", len(concepts))
 
     total_inserted = 0

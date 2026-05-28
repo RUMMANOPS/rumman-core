@@ -38,6 +38,9 @@ EMBED_DIMS = 1536
 PARAGRAPH_CHUNK_TOKENS = 500
 PARAGRAPH_OVERLAP_TOKENS = 50
 
+# text-embedding-3-large hard limit is 8192 tokens; ~4 chars/token on average
+_MAX_EMBED_CHARS = 8000 * 4
+
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -181,6 +184,9 @@ async def embed_and_insert_chunks(
     inserted = 0
 
     for i, chunk_text in enumerate(chunks):
+        if len(chunk_text) > _MAX_EMBED_CHARS:
+            log("CHUNK_TRUNCATED", doc=doc["id"], chunk=i, original=len(chunk_text), limit=_MAX_EMBED_CHARS)
+            chunk_text = chunk_text[:_MAX_EMBED_CHARS]
         resp = await ai.embeddings.create(model=EMBED_MODEL, input=chunk_text, dimensions=EMBED_DIMS)
         embedding = resp.data[0].embedding
 

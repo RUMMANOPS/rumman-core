@@ -32,7 +32,7 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 INSTITUTION = "SEU"
 EMBED_MODEL = "text-embedding-3-large"
-EMBED_DIMS = 3072
+EMBED_DIMS = 1536
 
 HEADERS = {
     "apikey": SUPABASE_KEY,

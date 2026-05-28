@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS document_chunks (
     source_document_id  uuid REFERENCES source_documents(id) ON DELETE CASCADE,
 
     content             text NOT NULL,
-    embedding           vector(3072),       -- text-embedding-3-large
+    embedding           vector(1536),       -- text-embedding-3-large at 1536 dims (pgvector HNSW max is 2000)
 
     -- Academic metadata (denormalised — fast filter without join)
     institution         text NOT NULL DEFAULT 'SEU',
@@ -158,7 +158,7 @@ CREATE INDEX IF NOT EXISTS idx_prereqs_prereq
 -- Called by query_handler.py for exam/description content retrieval.
 
 CREATE OR REPLACE FUNCTION match_course_chunks(
-    query_embedding     vector(3072),
+    query_embedding     vector(1536),
     p_course_code       text,
     p_institution       text DEFAULT 'SEU',
     match_count         int DEFAULT 20,
@@ -195,7 +195,7 @@ $$;
 -- Used for regulation / policy queries where course_code is unknown or irrelevant.
 
 CREATE OR REPLACE FUNCTION match_chunks_general(
-    query_embedding     vector(3072),
+    query_embedding     vector(1536),
     p_institution       text DEFAULT 'SEU',
     p_source_type       text DEFAULT NULL,
     match_count         int DEFAULT 15,

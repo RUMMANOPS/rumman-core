@@ -24,6 +24,8 @@ Usage:
   python3 scripts/extract_concepts.py --phase both
 """
 
+from __future__ import annotations
+
 import argparse
 import asyncio
 import json
@@ -108,9 +110,7 @@ async def _call_discovery_batch(
     chunks: list[dict],
 ) -> list[str]:
     """Ask GPT-4o-mini to extract concepts from a batch of chunks. Returns concept names."""
-    course_code = chunks[0].get("course_code") or (
-        (chunks[0].get("metadata") or {}).get("course_code") or "unknown"
-    )
+    course_code = chunks[0].get("course_code") or "unknown"
     chunk_texts = "\n---\n".join(
         (r.get("content") or "")[:400].strip() for r in chunks
     )
@@ -160,7 +160,7 @@ async def run_discovery(
             f"{SUPABASE_URL}/rest/v1/document_chunks",
             headers=HEADERS,
             params={
-                "select": "id,content,course_code,metadata",
+                "select": "id,content,course_code,source_type,language",
                 "limit":  str(sample_size),
                 "order":  "id",  # stable order for reproducibility
             },
@@ -177,7 +177,7 @@ async def run_discovery(
     # Group chunks by course_code for contextually coherent batches
     by_course: dict[str, list[dict]] = {}
     for c in chunks:
-        code = c.get("course_code") or (c.get("metadata") or {}).get("course_code") or "unknown"
+        code = c.get("course_code") or "unknown"
         by_course.setdefault(code, []).append(c)
 
     all_concept_names: set[str] = set()

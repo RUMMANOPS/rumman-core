@@ -24,7 +24,7 @@ import sys
 import json
 import asyncio
 import httpx
-from datetime import date
+from datetime import datetime
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
@@ -39,60 +39,150 @@ HEADERS = {
     "Prefer":        "return=representation",
 }
 
-GENERATION_PROMPT = """\
-You are helping build a normalization dictionary for a Saudi university student assistant.
+_BATCH_SYSTEM = """\
+You are building a normalization dictionary for a Saudi university student assistant.
+You will be given a specific vocabulary category to expand.
 
-Generate a comprehensive list of Gulf/Saudi Arabic academic student vocabulary.
-Focus on language used in Saudi Telegram channels by university students.
-
-Categories to cover:
-1. Exam panic and urgency phrases ("ما راح يجي في الفاينل", "وش يجي عندكم")
-2. Resource requests ("ابغى ملخص", "وين الشيت", "فيه سلايدات")
-3. Course-related slang (mixed Arabic-English, abbreviations)
-4. Professor behavior references ("الدكتور يحب يجيب", "عادةً الاستاذ يسأل")
-5. Deadline and schedule phrases ("امتى التسليم", "قريب الميدترم")
-6. Comprehension and confusion ("ما فهمت وش يقول", "يعني ايش")
-7. Common misspellings of academic terms in Arabic/transliteration
-8. Telegram-compressed expressions (dropped words, abbreviated sentences)
-9. Emotional urgency markers ("خلص والله ما عندي وقت")
-10. Mixed Arabic-English terms used in academic context
-
-For EACH entry, return:
+REQUIRED OUTPUT FORMAT — return exactly this JSON object, nothing else:
 {
-  "surface": "original Gulf/dialect form",
-  "canonical": "MSA Arabic equivalent (clear, unambiguous)",
-  "category": "one of: question_word | verb | negation | exam_term | resource | deadline | person | urgency | mixed | preposition | filler",
-  "notes": "brief note on usage context (optional)"
+  "entries": [
+    {
+      "surface": "original Gulf/Saudi dialect form (word or short phrase)",
+      "canonical": "clear MSA Arabic equivalent",
+      "category": "category label",
+      "notes": "one-line usage context"
+    }
+  ]
 }
 
-Return a JSON array of 250-350 entries. Prioritize terms you are confident are genuinely used by Saudi university students. Do not invent terms. Do not include terms already in standard MSA.\
+Rules:
+- Each entry must have non-empty surface AND canonical
+- Do not include terms already in standard MSA
+- canonical must be MSA Arabic, never another dialect form
+- For phrases: only include if the phrase as a whole deserves a different canonical than its parts\
 """
 
+_BATCHES = [
+    {
+        "label": "grammar",
+        "prompt": """\
+Generate 70 entries for Gulf/Saudi Arabic grammar forms used by university students.
+Include:
+- Question words and their spelling variants (وش، شو، ايش، إيش، ليش، ليه، وين، فين، مين، متين، كيفاش، كيفها، امتى)
+- Common Gulf verbs in all conjugations (يجي/جاء/جاب، يطلع/طلع، يشوف/شاف، يحط/حط، يقلّب، يدور)
+- Desire/request verbs (ابغى/بغيت/بغى، بدي/بدك/بده، نبي، ودّي، اعطني، تعطني)
+- Negation forms (مو، مافي، ماعندي، ما راح، مو صح، مو كذا)
+- Intensifiers and fillers (والله، يالله، يعني، بس، كلش، زين، تمام، صح)
+- Prepositions with attached definite articles (بالاختبار، بالميدترم، بالفاينل، بالكورس، بالمادة، بالفصل، عالكورس، عالاختبار، للاختبار، للمادة)
+category label for all: use the specific sub-type (question_word, verb, negation, preposition, filler)"""
+    },
+    {
+        "label": "exam_academic",
+        "prompt": """\
+Generate 70 entries for Gulf/Saudi Arabic exam and academic vocabulary.
+Include:
+- Exam types with and without definite article (ميدترم، الميدترم، فاينل، الفاينل، فينال، الفينال، كويز، الكويز، كويزات)
+- Academic deliverables (اسايمنت، اسيانمنت، الاسايمنت، اسايمنتات، برجكت، بروجكت، البرجكت، برجكتات)
+- Course materials (سلايد، سلايدات، سلايدز، نوتس، نوتز، شيت، شيتات، بوربوينت، بي بي)
+- Course/program words (كورس، الكورس، كورسات، ترم، الترم، ترمات، سيميستر، فصل)
+- Exam compilations (تجميع، التجميع، تجميعات، التجميعات)
+- Study resources (ملخص، ملخصات، مراجعة، مراجعات، مذكرة، مذكرات)
+- Platforms (بلاكبورد، بلاك بورد، منصة التعلم)
+category label: exam_term or resource"""
+    },
+    {
+        "label": "people_expressions",
+        "prompt": """\
+Generate 70 entries for Gulf/Saudi Arabic expressions about people, urgency, and comprehension.
+Include:
+- Professor/instructor titles with variants (دكتور، دكتورة، دكتوره، الدكتور، الدكتورة، الدكتوره، المدرس، المدرسة، استاذ، استاذة، الاستاذ، الاستاذة)
+- Urgency and panic phrases (خلص ما في وقت، ما فاضل وقت، قريب الاختبار، قريب الميدترم، قريب الفاينل، ما عندي وقت، والله خايف، ضاغط)
+- Emotional markers (يا الله، الله يعينني، خلاص، انتهيت، مو قادر، مو قادرة)
+- Comprehension and confusion (ما فهمت، ما فهمت شي، يعني ايش، وش يقصد، ما ادري، ما ادري وش، شو يعني، شرح لي)
+- Request patterns (ابغى اعرف، بدي افهم، ابغى شوف، وين الملخص، وين التجميعات، فيه سلايدات، فيه تجميعات)
+category label: person, urgency, or comprehension"""
+    },
+    {
+        "label": "telegram_phrases",
+        "prompt": """\
+Generate 70 entries for compressed Telegram expressions and deadline phrases.
+Include:
+- Deadline/schedule phrases (امتى التسليم، متى التسليم، قبل الميدترم، بعد الفاينل، آخر موعد، تاريخ التسليم، موعد التسليم)
+- Common Telegram abbreviations and compressed phrases (هل فيه، وش صار، شو في، ايش في، وش جاب، شو جاب، ايش يجي، وش يجيب)
+- Multi-word exam content phrases (وش يجي بالاختبار، شو يجي بالميدترم، وش جاء بالفاينل، ايش يطلع بالكويز، ما الي يجي، شو يحب يسأل، وش يجيب الدكتور)
+- Context-framing phrases (في هالكورس، في هالمادة، في هالفصل، هالترم، هالاختبار، هالميدترم، هذا الترم، الفصل الحالي)
+- Common compressed requests (ابي ملخص، بدي تجميع، نبي سلايدات، وش تنصح، شو اذاكر)
+category label: deadline, phrase, or exam_topics"""
+    },
+    {
+        "label": "mixed_morphological",
+        "prompt": """\
+Generate 70 entries for mixed Arabic-English terms and morphological variants.
+Include:
+- Mixed Arabic-English academic expressions (انا fail، كورس heavy، الداكتر strict، الكورس boring، اخذت A، رسبت بالكورس، pass وش يحتاج)
+- Misspellings and variant spellings of academic transliterations (اسايمنت/اسيانمنت/اسيجنمنت، برجكت/بروجكت/بروجيكت، سلايد/سلايدة، ميدترم/ميدتيرم، فاينل/فينال/فينل)
+- Morphological variants with different prefixes (وبالاختبار، وبالميدترم، فبالفاينل، للاسايمنت، بالاسايمنت، الاسايمنتات، الميدترمات)
+- Gulf dialect constructions with pronouns (وشك، وشه، وشها، وشهم، ليشك، عندك، عنده، عندها، عندهم)
+- Common student register expressions (الله يعطيك العافية، ياليت، حياك، الله يسعدك، ما قصرت)
+category label: mixed, morphological, or social"""
+    },
+]
 
-async def generate() -> list[dict]:
-    ai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
-    print("Calling GPT-4o for seed generation (~$0.30–0.60)...")
+async def _generate_batch(ai: AsyncOpenAI, batch: dict) -> list[dict]:
+    """Run one generation batch. Returns list of entry dicts."""
     resp = await ai.chat.completions.create(
         model="gpt-4o",
-        messages=[{"role": "user", "content": GENERATION_PROMPT}],
+        messages=[
+            {"role": "system", "content": _BATCH_SYSTEM},
+            {"role": "user",   "content": batch["prompt"]},
+        ],
         temperature=0.3,
-        max_tokens=6000,
+        max_tokens=5000,
         response_format={"type": "json_object"},
     )
 
     raw = json.loads(resp.choices[0].message.content)
 
-    # Handle both {"entries": [...]} and bare array
     if isinstance(raw, list):
         entries = raw
     elif isinstance(raw, dict):
-        entries = raw.get("entries", []) or raw.get("items", []) or list(raw.values())[0]
+        entries = raw.get("entries") or raw.get("items") or raw.get("lexicon") or []
+        if not entries:
+            list_values = [v for v in raw.values() if isinstance(v, list)]
+            entries = list_values[0] if list_values else []
     else:
         entries = []
 
-    print(f"Generated {len(entries)} candidates.")
-    return entries
+    return [e for e in entries if isinstance(e, dict)]
+
+
+async def generate() -> list[dict]:
+    ai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
+
+    print(f"Running {len(_BATCHES)} parallel batches (~$0.30–0.50 total)...")
+    tasks = [_generate_batch(ai, b) for b in _BATCHES]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    all_entries: list[dict] = []
+    for batch, result in zip(_BATCHES, results):
+        if isinstance(result, Exception):
+            print(f"  WARN: batch '{batch['label']}' failed: {result}")
+            continue
+        print(f"  batch '{batch['label']}': {len(result)} entries")
+        all_entries.extend(result)
+
+    # Deduplicate by surface form (keep first occurrence)
+    seen: set[str] = set()
+    deduped = []
+    for e in all_entries:
+        key = (e.get("surface") or "").strip()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(e)
+
+    print(f"Total after dedup: {len(deduped)} candidates.")
+    return deduped
 
 
 async def insert_candidates(entries: list[dict]) -> int:
@@ -130,7 +220,7 @@ async def insert_candidates(entries: list[dict]) -> int:
 async def main():
     output_path = os.path.join(
         os.path.dirname(__file__), "..", "data",
-        f"seed_candidates_{date.today().isoformat()}.json"
+        f"seed_candidates_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
     )
 
     entries = await generate()

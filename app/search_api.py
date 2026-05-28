@@ -18,10 +18,15 @@ OpenAI classifies intent only. Corpus is the sole source of truth.
 """
 
 import os
+import sys
 import hashlib
 import asyncio
 import logging
 import httpx
+
+# Ensure app/ is on sys.path so query_understanding is importable whether uvicorn
+# loads this as "app.search_api" (Railway) or "search_api" (local direct run).
+sys.path.insert(0, os.path.dirname(__file__))
 
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException

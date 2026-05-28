@@ -160,6 +160,24 @@ def extract_text_from_pdf(file_path: str) -> tuple[str, int, str, float]:
     return full_text, page_count, method, confidence
 
 
+async def delete_from_storage(http: httpx.AsyncClient, storage_path: str) -> bool:
+    parts = storage_path.split("/", 1)
+    if len(parts) != 2:
+        return False
+    bucket, obj_path = parts[0], parts[1]
+    r = await http.delete(
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}",
+        headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+                 "Content-Type": "application/json"},
+        json={"prefixes": [obj_path]},
+    )
+    if r.status_code >= 400:
+        log("STORAGE_DELETE_ERROR", status=r.status_code, path=storage_path)
+        return False
+    log("RAW_FILE_DELETED", path=storage_path)
+    return True
+
+
 async def create_embed_job(http: httpx.AsyncClient, source_document_id: str) -> bool:
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/processing_jobs",
@@ -222,6 +240,15 @@ async def process_job(http: httpx.AsyncClient, job: dict):
             "ocr_confidence": confidence if confidence > 0 else None,
             "processing_status": "extracted",
         })
+
+        # Delete raw file from Storage — raw sources are transient, knowledge is permanent
+        storage_path = doc.get("storage_path")
+        if storage_path:
+            deleted = await delete_from_storage(http, storage_path)
+            if deleted:
+                await update_source_document(http, source_document_id, {
+                    "raw_file_deleted_at": "now()",
+                })
 
         if method == "needs_ocr":
             log("NEEDS_OCR", id=job_id, doc_id=source_document_id,

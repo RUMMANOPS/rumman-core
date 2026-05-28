@@ -313,6 +313,49 @@ async def fail_job(http, job, error):
     )
 
 
+def is_pdf(fm: dict) -> bool:
+    mime = (fm.get("mime_type") or "").lower()
+    name = (fm.get("file_name") or "").lower()
+    return "pdf" in mime or name.endswith(".pdf")
+
+
+def is_image(mt: str, fm: dict) -> bool:
+    mime = (fm.get("mime_type") or "").lower()
+    return mt == "photo" or mime.startswith("image/")
+
+
+async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload: dict) -> bool:
+    r = await http.post(
+        f"{SUPABASE_URL}/rest/v1/processing_jobs",
+        headers=HEADERS,
+        json={"job_type": job_type, "status": "pending", "payload": payload, "retry_count": 0},
+    )
+    if r.status_code == 409:
+        return True  # already queued
+    if r.status_code >= 400:
+        print(f"PROCESSING_JOB_CREATE_ERROR | type={job_type} | status={r.status_code}", flush=True)
+        return False
+    return True
+
+
+async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict, chat_id: int):
+    """Create a processing_job for actionable media found during backfill."""
+    base = {
+        "platform_chat_id": str(chat_id),
+        "platform_message_id": str(msg.id),
+        "file_name": fm.get("file_name"),
+        "mime_type": fm.get("mime_type"),
+        "caption": (msg.message or "")[:500],
+    }
+
+    if mt in ("voice", "audio"):
+        await create_processing_job(http, "audio_transcribe", base)
+    elif mt == "file" and is_pdf(fm):
+        await create_processing_job(http, "telegram_media", {**base, "media_type": "pdf"})
+    elif is_image(mt, fm):
+        await create_processing_job(http, "telegram_media", {**base, "media_type": "image"})
+
+
 async def process_job(client, http, job):
     chat_id = int(job["platform_chat_id"])
     chat_name = job.get("chat_name") or "Unknown"
@@ -326,6 +369,7 @@ async def process_job(client, http, job):
     processed = 0
     inserted = 0
     duplicate = 0
+    media_queued = 0
     last_id = None
     oldest_id = None
 
@@ -343,18 +387,25 @@ async def process_job(client, http, job):
         last_id = msg.id
         oldest_id = msg.id if oldest_id is None else min(oldest_id, msg.id)
 
+        mt = message_type(msg)
+        fm = file_meta(msg)
         payload = await build_payload(msg, chat_name, chat_type, chat_id)
         result = await rest_post(http, "messages", payload)
 
         if result == "inserted":
             inserted += 1
+            # Only spawn media jobs for freshly inserted messages — duplicates were
+            # either already queued by the live listener or processed in a prior batch.
+            if mt not in ("text", "poll", "other"):
+                await maybe_spawn_media_job(http, msg, mt, fm, chat_id)
+                media_queued += 1
         elif result == "duplicate":
             duplicate += 1
 
         if processed % 100 == 0:
             await heartbeat(http, job["id"])
             print(
-                f"BACKFILL_PROGRESS | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate}",
+                f"BACKFILL_PROGRESS | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | media_queued={media_queued}",
                 flush=True,
             )
 
@@ -370,7 +421,7 @@ async def process_job(client, http, job):
     )
 
     print(
-        f"BACKFILL_BATCH_DONE | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | done={done}",
+        f"BACKFILL_BATCH_DONE | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | media_queued={media_queued} | done={done}",
         flush=True,
     )
 

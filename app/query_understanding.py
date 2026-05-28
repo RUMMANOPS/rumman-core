@@ -51,6 +51,7 @@ INTENT_TYPES = frozenset({
 @dataclass
 class IntentResult:
     normalized_text: str
+    english_query: Optional[str]      # English translation for cross-language corpus search
     intent_type: str
     course_codes: list[str]
     exam_type: Optional[str]          # "midterm" | "final" | "quiz" | None
@@ -180,6 +181,7 @@ Your ONLY job is to extract structured intent from the student's query.
 Return ONLY valid JSON matching this schema (no extra keys, no explanation):
 {
   "normalized_text": "Full MSA Arabic rewrite of the query. Remove dialect. Keep all meaningful content.",
+  "english_query": "Concise English translation of the query intent. Used to search English-language course content.",
   "intent_type": "<one of: exam_topics | exam_schedule | resource | deadline | course_info | clarify | unknown>",
   "course_codes": ["array of course codes found in query, uppercase, e.g. CS241"],
   "exam_type": "<midterm | final | quiz | null>",
@@ -237,7 +239,7 @@ async def classify_intent(
                     {"role": "user",   "content": user_content},
                 ],
                 temperature=0,
-                max_tokens=350,
+                max_tokens=400,
                 response_format={"type": "json_object"},
             ),
             timeout=timeout,
@@ -255,8 +257,11 @@ async def classify_intent(
             if isinstance(c, str) and c.strip()
         ]
 
+        english_query = (raw.get("english_query") or "").strip() or None
+
         return IntentResult(
             normalized_text=raw.get("normalized_text", query) or query,
+            english_query=english_query,
             intent_type=intent_type,
             course_codes=codes,
             exam_type=raw.get("exam_type"),
@@ -304,15 +309,24 @@ def build_search_params(
     source_type  = intent.source_type_filter
     intent_query = intent.normalized_text or normalized
 
-    # Course-specific query → course-only search (no broad fallback; different
-    # courses' content must not bleed in even at higher similarity)
+    # Course-specific query → search within course only (no broad fallback to
+    # prevent other courses' content bleeding in at higher similarity).
+    # Run both Arabic and English queries — corpus may be in either language.
     if course_code:
-        return [SearchParams(
+        searches = [SearchParams(
             query=intent_query,
             course_code=course_code,
             source_type=source_type,
             limit=limit,
         )]
+        if intent.english_query and intent.english_query != intent_query:
+            searches.append(SearchParams(
+                query=intent.english_query,
+                course_code=course_code,
+                source_type=source_type,
+                limit=limit,
+            ))
+        return searches
 
     # No course code → broad search
     searches: list[SearchParams] = [

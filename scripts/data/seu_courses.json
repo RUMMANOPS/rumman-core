@@ -1,0 +1,682 @@
+{
+  "institution": "SEU",
+  "source": "Official SEU Study Plans, September 2023",
+  "programs": [
+    {
+      "program": "BSBA_MGT",
+      "college": "College of Administrative and Financial Sciences",
+      "college_ar": "كلية العلوم الإدارية والمالية",
+      "title": "Bachelor of Science in Business Administration - Major in Management",
+      "language": "en",
+      "total_credits": 130,
+      "courses": [
+        {
+          "course_code": "CI001",
+          "course_title": "Academic Skills",
+          "credit_hours": 2,
+          "level": 1,
+          "prerequisites": [],
+          "description": "The course aims to enable students develop their own self-management and organize their competence and abilities to achieve success in both academic university years and professional life in the future. The course focuses on three main skills and knowledge: learning teaching process, research and methods of research and thinking skills."
+        },
+        {
+          "course_code": "COMM001",
+          "course_title": "Communication Skills",
+          "credit_hours": 2,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course deals with communication skills as a tool for achieving personal psychological and social adaptability. It focuses on methodology that enables students to be aware of conscious communication and positive interaction with the society. Topics include: nature of communication and its elements, types and characteristics, verbal and non-verbal communication, self-concept, skill of persuasion, personal interviews, personal abilities, skill of writing a resume, and effective presentation."
+        },
+        {
+          "course_code": "CS001",
+          "course_title": "Computer Essentials",
+          "credit_hours": 3,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course is an essential guide to computing concepts providing students with a complete learning solution focusing on the most important and current concepts of information technology. Students are given a streamlined, concise, relevant approach to the fundamental issues surrounding the world of computing through a balance between theory and applied learning."
+        },
+        {
+          "course_code": "ENG001",
+          "course_title": "English Language Skills",
+          "credit_hours": 8,
+          "level": 1,
+          "prerequisites": [],
+          "description": "English Language Skills is a full-year course covering reading, writing, listening, and speaking. The course uses the Q:Skills series from Oxford University Press. Contact hours support and reinforce online learning. Students develop the ability to communicate effectively in English for academic and professional purposes."
+        },
+        {
+          "course_code": "MATH001",
+          "course_title": "Fundamentals of Math",
+          "credit_hours": 3,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course addresses the outcomes of introductory and intermediate algebra. Topics include: basic algebraic properties, integers, simplifying and factoring polynomials, solving and graphing linear equations and inequalities, solving systems of equations, functions, rational expressions, quadratic and rational equations and inequalities, absolute value, and graphing systems."
+        },
+        {
+          "course_code": "ISLM101",
+          "course_title": "Introduction to Islamic Culture",
+          "credit_hours": 2,
+          "level": 3,
+          "prerequisites": [],
+          "description": "Introduction to Islamic culture, its fundamental concepts, values, and principles. The course covers the sources of Islamic culture, its characteristics and objectives, and its relationship to other cultures. Topics include Islamic beliefs, worship, morality, and the role of Islamic culture in contemporary society."
+        },
+        {
+          "course_code": "STAT101",
+          "course_title": "Statistics",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces the student to statistics with business applications. The course covers both descriptive and inferential statistics. Topics included are: measures of central tendency; measures of dispersion; graphical displays of data; linear regression; basic probability concepts; binomial and normal probability distributions; confidence intervals; and hypothesis testing."
+        },
+        {
+          "course_code": "LAW101",
+          "course_title": "Legal Environment of Business",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course surveys the legal environment in which business operates. Topics include the foundations of the legal system, contracts, torts, business organizations, employment law, consumer protection, and intellectual property. Students develop understanding of legal rights and obligations in business contexts in Saudi Arabia."
+        },
+        {
+          "course_code": "ECON101",
+          "course_title": "Microeconomics",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces the principles of microeconomics. Topics include supply and demand analysis, consumer behavior and utility theory, production and cost theory, market structures (perfect competition, monopoly, oligopoly, monopolistic competition), factor markets, and market failures. Applications to business decision-making are emphasized."
+        },
+        {
+          "course_code": "MGT101",
+          "course_title": "Principles of Management",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces the fundamental concepts and principles of management. Topics include the historical development of management thought, planning and decision-making, organizing and organizational structure, leading and motivation theories, controlling, and the manager's role in today's dynamic global environment."
+        },
+        {
+          "course_code": "ACCT101",
+          "course_title": "Principles of Accounting",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces the fundamental concepts of financial accounting. Topics include the accounting equation, journal entries and the accounting cycle, financial statements (income statement, balance sheet, cash flow), adjusting entries, merchandising operations, inventory, and internal controls."
+        },
+        {
+          "course_code": "ISLM102",
+          "course_title": "Professional Conduct & Ethics in Islam",
+          "credit_hours": 2,
+          "level": 4,
+          "prerequisites": [],
+          "description": "This course aims to establish Islamic ethics and professional conduct in student behavior, particularly in social and professional aspects. Topics include Islamic ethics in the workplace, business ethics, professional responsibilities, and ethical decision-making from an Islamic perspective."
+        },
+        {
+          "course_code": "STAT201",
+          "course_title": "Quantitative Methods",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["STAT101"],
+          "description": "This course extends statistical methods to business decision-making. Topics include probability theory, probability distributions, hypothesis testing, regression analysis, time series analysis, linear programming, decision theory, and forecasting. Students learn to apply quantitative methods to analyze business problems and support management decisions."
+        },
+        {
+          "course_code": "FIN101",
+          "course_title": "Principles of Finance",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["ACCT101"],
+          "description": "This course introduces the principles of financial management. Topics include the financial environment and role of financial managers, time value of money, financial statement analysis, working capital management, capital budgeting, risk and return, cost of capital, and capital structure decisions."
+        },
+        {
+          "course_code": "MGT201",
+          "course_title": "Marketing Management",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines the principles and practices of marketing management. Topics include marketing environment analysis, consumer behavior, market segmentation and targeting, positioning, product strategy, pricing strategy, distribution channels, promotion and advertising, digital marketing, and marketing planning in Saudi and global contexts."
+        },
+        {
+          "course_code": "MGT211",
+          "course_title": "HR Management",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["MGT101"],
+          "description": "This course covers the theory and practice of human resource management. Topics include HR planning, job analysis and design, recruitment and selection, training and development, performance appraisal, compensation and benefits, employee relations, and contemporary HR challenges including Saudization (Nitaqat) requirements."
+        },
+        {
+          "course_code": "ECOM101",
+          "course_title": "E-Commerce",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["STAT101"],
+          "description": "This course introduces the concepts and practices of electronic commerce. Topics include the evolution of e-commerce, business models, online retailing, electronic payment systems, digital marketing, m-commerce, social commerce, security and privacy in e-commerce, legal and ethical issues, and e-commerce strategy."
+        },
+        {
+          "course_code": "ECON201",
+          "course_title": "Macroeconomics",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": [],
+          "description": "This course introduces the principles of macroeconomics. Topics include national income accounting, economic growth, business cycles, unemployment and inflation, fiscal policy, monetary policy, international trade and finance, and economic development. Applications to the Saudi economy and Vision 2030 context are emphasized."
+        },
+        {
+          "course_code": "MIS201",
+          "course_title": "Management of Information Systems",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines the strategic role of information systems in organizations. Topics include types of information systems, systems development lifecycle, database management, networking and telecommunications, enterprise systems (ERP, CRM, SCM), e-business, information security, and the impact of IT on organizational strategy and competitive advantage."
+        },
+        {
+          "course_code": "ECOM201",
+          "course_title": "Introduction to E-Management",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines management practices in the digital age. Topics include digital transformation of organizations, managing virtual teams, online collaboration tools, digital leadership, e-government, knowledge management in digital environments, and the strategic implications of digital technologies for management."
+        },
+        {
+          "course_code": "MGT301",
+          "course_title": "Organizational Behavior",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MGT211"],
+          "description": "This course examines individual and group behavior within organizations. Topics include personality and individual differences, motivation theories, group dynamics and teamwork, leadership styles, organizational culture, conflict and negotiation, organizational change and development, and cross-cultural aspects of organizational behavior."
+        },
+        {
+          "course_code": "MGT311",
+          "course_title": "Intro to Operations Management",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MGT101", "STAT101"],
+          "description": "This course introduces the design and management of production and service operations. Topics include operations strategy, process design and analysis, capacity planning, facility location and layout, supply chain management, inventory management, quality management (TQM, Six Sigma), scheduling, and lean operations. Quantitative methods are applied to operational decisions."
+        },
+        {
+          "course_code": "MGT312",
+          "course_title": "Decision Making and Problem Solving",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MGT101"],
+          "description": "This course develops analytical and critical thinking skills for managerial decision-making. Topics include decision theory, problem identification and structuring, quantitative and qualitative decision methods, decision under uncertainty and risk, group decision-making processes, creativity and innovation in problem solving, and ethical dimensions of decisions."
+        },
+        {
+          "course_code": "ISLM103",
+          "course_title": "Islamic Economic System",
+          "credit_hours": 2,
+          "level": 6,
+          "prerequisites": ["ISLM101"],
+          "description": "This course introduces the Islamic economic system and its principles. Topics include the concept of ownership in Islam, prohibition of riba (interest), zakat system, Islamic banking and finance, insurance (takaful), Islamic perspective on markets and competition, economic justice, and the Islamic economic model in the context of modern economies."
+        },
+        {
+          "course_code": "ACCT301",
+          "course_title": "Cost Accounting",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["ACCT101"],
+          "description": "This course covers the principles and methods of cost accounting for managerial decision-making. Topics include cost concepts and classifications, job-order and process costing, activity-based costing, cost-volume-profit analysis, budgeting and standard costing, variance analysis, and the use of cost information for pricing and performance evaluation."
+        },
+        {
+          "course_code": "MGT321",
+          "course_title": "Intro to International Business",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": [],
+          "description": "This course examines the international business environment and strategies for competing globally. Topics include theories of international trade and investment, political and legal environments, cultural differences in business, foreign exchange markets, entry modes (exporting, licensing, joint ventures, FDI), international marketing, and global supply chain management."
+        },
+        {
+          "course_code": "MGT322",
+          "course_title": "Logistics Management",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines the management of logistics and supply chain operations. Topics include logistics strategy, transportation management, warehousing and inventory control, order fulfillment, procurement and supplier management, reverse logistics, logistics technology and information systems, and global logistics challenges."
+        },
+        {
+          "course_code": "MGT323",
+          "course_title": "Project Management",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["MGT311"],
+          "description": "This course covers the principles and practices of project management. Topics include project initiation, scope and work breakdown structure, scheduling (CPM, PERT, Gantt charts), resource planning and allocation, cost estimation and budgeting, risk management, quality management, project communication, and project closure. Project management software tools are used."
+        },
+        {
+          "course_code": "ISLM104",
+          "course_title": "Social System and Human Rights",
+          "credit_hours": 2,
+          "level": 7,
+          "prerequisites": ["ISLM102"],
+          "description": "This course examines the Islamic social system and human rights. Topics include the foundations of the Islamic social system, family structure and rights, social relationships and community, human rights in Islam, women's rights in Islam, rights of non-Muslims, social welfare, and the relationship between Islamic social principles and contemporary human rights discourse."
+        },
+        {
+          "course_code": "MGT401",
+          "course_title": "Strategic Management",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["MGT201", "FIN101"],
+          "description": "This capstone course integrates the functional areas of business in a strategic management framework. Topics include strategic analysis (SWOT, PESTEL, Porter's Five Forces), strategy formulation at corporate and business unit levels, competitive strategies, strategy implementation and organizational structure, strategic control and performance measurement (balanced scorecard), and strategy in global contexts."
+        },
+        {
+          "course_code": "MGT324",
+          "course_title": "Public Management",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines management principles and practices in the public sector. Topics include the nature and scope of public administration, bureaucracy and organizational theory, public policy processes, budgeting in government, human resource management in public organizations, e-government, performance management in public agencies, and public sector reform in Saudi Arabia."
+        },
+        {
+          "course_code": "MGT402",
+          "course_title": "Entrepreneurship",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["MGT101"],
+          "description": "This course develops entrepreneurial knowledge and skills. Topics include the entrepreneurial mindset and opportunity recognition, business idea generation and validation, business plan development, forms of business ownership, sources of financing, marketing for new ventures, managing growth, social entrepreneurship, and the entrepreneurship ecosystem in Saudi Arabia and Vision 2030 context."
+        },
+        {
+          "course_code": "MGT403",
+          "course_title": "Knowledge Management",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines the management of organizational knowledge as a strategic asset. Topics include knowledge types (explicit vs. tacit), knowledge creation and capture, knowledge sharing and transfer, communities of practice, organizational learning, knowledge management systems and technologies, intellectual capital measurement, and building knowledge-based organizations."
+        },
+        {
+          "course_code": "MGT404",
+          "course_title": "Organization Design and Development",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": ["MGT101"],
+          "description": "This course examines principles of organizational design and planned change. Topics include organizational structures and configurations, contingency factors in organizational design, organizational life cycles, organizational diagnosis, planned change interventions, managing resistance to change, organizational development (OD) methods, and building adaptive organizations."
+        },
+        {
+          "course_code": "MGT421",
+          "course_title": "Communications Management",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": ["MGT101"],
+          "description": "This course covers managerial communication theory and practice. Topics include organizational communication systems, formal and informal communication channels, written business communication, presentation skills, intercultural communication, crisis communication, media relations, digital communication strategies, and communication in project and team contexts."
+        },
+        {
+          "course_code": "MGT422",
+          "course_title": "Business Ethics and Organization Social Responsibility",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": [],
+          "description": "This course examines ethical decision-making and corporate social responsibility in business. Topics include ethical theories and frameworks, stakeholder theory, corporate governance, ethical issues in functional areas (marketing, finance, HR), corporate social responsibility (CSR) strategy and reporting, sustainability, and the intersection of Islamic ethics with business ethics."
+        },
+        {
+          "course_code": "MGT430",
+          "course_title": "Internship",
+          "credit_hours": 6,
+          "level": 8,
+          "prerequisites": [],
+          "description": "A supervised work experience in an approved organization. Students apply academic knowledge in a real business environment, developing professional skills under the guidance of both a workplace supervisor and a faculty advisor. Requires completion of 90 credit hours. Students submit field reports and a final internship report."
+        }
+      ]
+    },
+    {
+      "program": "BSCS",
+      "college": "College of Computing and Informatics",
+      "college_ar": "كلية الحوسبة والمعلوماتية",
+      "title": "Bachelor of Science in Computer Science",
+      "language": "en",
+      "total_credits": 130,
+      "courses": [
+        {
+          "course_code": "ENG001",
+          "course_title": "English Language Skills",
+          "credit_hours": 16,
+          "level": 1,
+          "prerequisites": [],
+          "description": "English Language Skills is a full-year course (ENG001 and ENG002 combined) covering reading, writing, listening, and speaking. The course uses the Q:Skills series from Oxford University Press. The four skills of reading, writing, listening and speaking are all covered. Students develop the ability to communicate effectively in English for academic and technical purposes."
+        },
+        {
+          "course_code": "CS001",
+          "course_title": "Computer Essentials",
+          "credit_hours": 3,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course is an essential guide to computing concepts and provides the learner with a complete learning solution focusing on the most important, essential, and current concepts of information technology. Students are given a streamlined, concise, relevant approach to the fundamental issues surrounding the world of computing through a balance between theory and applied learning."
+        },
+        {
+          "course_code": "COMM001",
+          "course_title": "Communication Skills",
+          "credit_hours": 2,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course focuses on communication skills for personal and professional development. Topics include the nature and elements of communication, types and characteristics, verbal and non-verbal communication, self-concept, persuasion skills, personal interviews, resume writing, and effective presentation skills."
+        },
+        {
+          "course_code": "MATH001",
+          "course_title": "Fundamentals of Mathematics",
+          "credit_hours": 3,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course addresses the outcomes of introductory and intermediate algebra. Topics include basic algebraic properties, integers, simplifying and factoring polynomials, solving and graphing linear equations and inequalities, systems of equations, functions, rational expressions, quadratic equations, and absolute value."
+        },
+        {
+          "course_code": "CI001",
+          "course_title": "Academic Skills",
+          "credit_hours": 2,
+          "level": 1,
+          "prerequisites": [],
+          "description": "This course aims to help students manage themselves and develop their abilities and capabilities to achieve success, excellence, and creativity. It covers strategies and research tools, learning tools, and thinking skills. The course also enhances self-learning strategies and tools for learning in electronic learning environments."
+        },
+        {
+          "course_code": "SCI101",
+          "course_title": "General Physics 1",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces students to fundamental concepts in physics. Topics include motion in one dimension, vectors, motion in two dimensions, laws of motion, circular motion, potential energy and conservation of energy, linear momentum, collision, rotation of a rigid body, rolling motion, law of gravity, and various types of waves."
+        },
+        {
+          "course_code": "CS230",
+          "course_title": "Object Oriented Programming",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces students to the principles of computer analysis of problems, design of algorithms, programming, and testing using the Java programming language. Topics include problem analysis, basics of programming, data types, control structures, functions, arrays, object-oriented programming, inheritance, recursion, and the mechanics of running, testing, and debugging."
+        },
+        {
+          "course_code": "ENG103",
+          "course_title": "Technical Writing",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course offers a general overview on principles and procedures of technical writing. Attention is given to analyzing audience and purpose, organizing information, designing graphic aids, and writing such specialized forms as abstracts, instructions, and proposals. The course emphasizes elements of good writing style, appropriate grammar and mechanics, clarity of language, and logical development."
+        },
+        {
+          "course_code": "MATH150",
+          "course_title": "Discrete Mathematics",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces students to fundamental algebraic, logical and combinatorial concepts in mathematics. Topics include Boolean Logic, Predicate Logic, sets, mapping, relations, elementary counting principles, algorithm and proof techniques, graphs, and recursions. Applications to computer science problems are emphasized throughout."
+        },
+        {
+          "course_code": "CS231",
+          "course_title": "Digital Logic Design",
+          "credit_hours": 3,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces the fundamental concepts of digital logic design. Topics include number systems, binary codes, Boolean algebra, canonical and fundamental forms of Boolean functions, applications to digital circuits design, minimization of Boolean functions by Boolean algebra and Karnaugh maps, two-level and multi-level digital circuits, decoders, encoders, multiplexers, demultiplexers, latches, flip-flops, registers, counters, and synthesis of synchronous sequential circuits."
+        },
+        {
+          "course_code": "ISLM101",
+          "course_title": "Islamic Faith",
+          "credit_hours": 2,
+          "level": 3,
+          "prerequisites": [],
+          "description": "This course introduces Islamic faith and its most important terminology, sources, and pillars of faith. Topics include Islamic beliefs, the most important challenges facing Islamic faith, and an introduction to Islamic thought. The course builds the student's understanding of Islamic creed and its role in shaping values and behavior."
+        },
+        {
+          "course_code": "SCI201",
+          "course_title": "General Physics 2",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["SCI101"],
+          "description": "This course is the logical extension of General Physics 1. It introduces students to interference, diffraction, and polarization, magnetic fields, electromagnetic waves, Maxwell's equations, modern physics and applications, molecules and solids, semiconductors, and semiconductor devices."
+        },
+        {
+          "course_code": "CS240",
+          "course_title": "Data Structure",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["CS230"],
+          "description": "In this course, students work on complex data structures and algorithms. It includes key data structures including stacks, queues, linked lists, binary trees, recursion, and examples using fundamental algorithms of computer science. Java programming language is used. The course covers time and space complexity, searching algorithms, and sorting algorithms."
+        },
+        {
+          "course_code": "CS241",
+          "course_title": "Computer Architecture and Organization",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["CS231"],
+          "description": "This course covers computer architecture: selecting and interconnecting hardware components to create a computer that meets functional, performance, and cost goals. Students learn to design a correct single processor computer including processor data path, processor control, pipelining optimization, instruction level parallelism, cache and memory systems, and I/O systems. Students also learn to construct assembly language programs."
+        },
+        {
+          "course_code": "CS242",
+          "course_title": "Theory of Computing",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["CS230"],
+          "description": "This course provides knowledge of finite automata and their role and use in computation. Topics include formal mathematical models of computation: finite automata, pushdown automata, Turing machines; theory of language translators including grammars, syntax, semantics, parsing, regular languages, Pumping Lemmas for regular languages and CFG, and complexity theory."
+        },
+        {
+          "course_code": "CS243",
+          "course_title": "Discrete Mathematics for CS",
+          "credit_hours": 3,
+          "level": 4,
+          "prerequisites": ["MATH150"],
+          "description": "This course provides an applied understanding of discrete mathematics concepts for computer science. Topics include discrete structures (sets, permutations, relations, graphs, trees, finite-state machines), counting problems, and analysis of algorithms. The course expands and deepens understanding of key discrete mathematics topics from MATH150."
+        },
+        {
+          "course_code": "ISLM102",
+          "course_title": "Professional Conduct & Ethics in Islam",
+          "credit_hours": 2,
+          "level": 4,
+          "prerequisites": [],
+          "description": "This course aims to establish Islamic ethics and professional conduct in student behavior, particularly in social and professional aspects. Topics include Islamic ethics in the workplace, professional responsibilities, and ethical decision-making from an Islamic perspective applied to technology and computing careers."
+        },
+        {
+          "course_code": "MATH251",
+          "course_title": "Linear Algebra",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["MATH150"],
+          "description": "Topics include systems of linear equations, their applications and solutions. Matrices, vectors, elementary operations on vectors, linear independence, spanning sets, and bases. Eigenvalues, eigenvectors, and eigenspaces are discussed. Applications to IT systems and computer science problems are emphasized."
+        },
+        {
+          "course_code": "CS350",
+          "course_title": "Introduction to Database",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["CS240"],
+          "description": "This course introduces database systems concepts including DBMS types (Relational, Hierarchical, NoSQL, Object-Based, Object-Oriented, and Distributed), Entity-Relationship model, Data models (Relational model and SQL), Database design (dependencies and normalization), Database implementation, and Database Security Models. Students implement databases using modern DBMS tools."
+        },
+        {
+          "course_code": "CS351",
+          "course_title": "Operating Systems",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["CS241"],
+          "description": "This course familiarizes students with the principles and underlying concepts of operating systems. Focus is on understanding the technologies that make contemporary operating systems work efficiently. Topics include system architecture, processes, threads, synchronization, I/O, file systems, memory and storage management, and protection and security techniques."
+        },
+        {
+          "course_code": "CS352",
+          "course_title": "System Analysis and Design",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["CS230"],
+          "description": "This course introduces modeling techniques and fundamental principles of problem analysis and software design. The course concentrates on object-oriented approaches for modeling software requirements and software design. Topics include requirements determination, database design, characteristics of internet-based systems analysis and design, and factors affecting maintenance. Case studies and practical examples are used throughout."
+        },
+        {
+          "course_code": "CS353",
+          "course_title": "Design and Analysis of Algorithms",
+          "credit_hours": 3,
+          "level": 5,
+          "prerequisites": ["CS240", "CS242"],
+          "description": "This course teaches common algorithms for tackling various types of problems in computer science. Topics include designing strategies, techniques, and theoretical concepts for analyzing computational complexity of major algorithms. The course covers data structure applications, decrease-and-conquer, divide and conquer, greedy algorithms, dynamic programming, NP-completeness, and approximation algorithms."
+        },
+        {
+          "course_code": "ISLM103",
+          "course_title": "Islamic Economic System",
+          "credit_hours": 2,
+          "level": 5,
+          "prerequisites": ["ISLM101"],
+          "description": "This course introduces the Islamic economic system. Topics include economic issues and their importance, the Islamic view of ownership, insurance (takaful) and its types, financial markets and their Islamic rulings, money laundering and its effects, privatization and its forms, economic globalization and its positive and negative effects, economic integration, and approaches to controlling inflation."
+        },
+        {
+          "course_code": "CS360",
+          "course_title": "Computer Networks",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["CS351"],
+          "description": "This course explores fundamental concepts in the design and implementation of computer communication networks and their protocols. Topics include layered network architectures, applications, transport, congestion, routing, data link protocols, and local area networks. Emphasis is placed on the protocols used on the Internet."
+        },
+        {
+          "course_code": "STAT101",
+          "course_title": "Statistics",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["MATH150"],
+          "description": "This course introduces statistics with business applications. Topics include measures of central tendency, measures of dispersion, graphical displays of data, linear regression, basic probability concepts, binomial and normal probability distributions, confidence intervals, hypothesis testing for means and proportions, ANOVA, and goodness of fit tests. Microsoft Excel is used."
+        },
+        {
+          "course_code": "CS361",
+          "course_title": "Web Programming",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["CS350"],
+          "description": "This course is an overview of modern Web technologies for web development. Topics include HTML5, CSS3, JavaScript, DOM, XML, Rich Internet Applications (RIAs) with AJAX, server-side programming using PHP, and designing and manipulating web databases. Students learn to create web pages, develop dynamic web pages, design XML schemas, and build web applications."
+        },
+        {
+          "course_code": "CS362",
+          "course_title": "Artificial Intelligence",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["CS353"],
+          "description": "This course provides a thorough introduction to essential concepts of artificial intelligence. Topics include primary AI methodologies for developing intelligent computer systems, AI applications (speech recognition, face recognition, machine translation, autonomous driving, robotics), foundational AI techniques (machine learning, deep learning, intelligent agents, reinforcement learning), AI programming languages and frameworks, and the ethics and future of AI."
+        },
+        {
+          "course_code": "CS363",
+          "course_title": "Principles of Programming Languages",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["CS240"],
+          "description": "This course provides fundamental concepts of programming languages rather than learning specific languages. Topics include higher-order functions, data structures (records and variants), mutable state, exceptions, objects and classes, and types. The course also discusses language implementations through interpreters and compilers."
+        },
+        {
+          "course_code": "CS364",
+          "course_title": "Computing Entrepreneurship and Innovation",
+          "credit_hours": 3,
+          "level": 6,
+          "prerequisites": ["CS350"],
+          "description": "This course develops entrepreneurial skills to start and operate a business in computing. Topics include entrepreneurial traits and opportunity recognition, business idea generation and validation, research, planning, operations, business regulations, innovation practices in computer science, patents, and Intellectual Property Rights. The capstone event is developing and presenting a formal business plan."
+        },
+        {
+          "course_code": "ISLM104",
+          "course_title": "Islamic Social System",
+          "credit_hours": 2,
+          "level": 7,
+          "prerequisites": ["ISLM102"],
+          "description": "This course studies the Muslim community and the foundations of Islamic society. Topics include the foundations of the Muslim community, Islamic care for society, methods of strengthening social bonds, characteristics of Islamic society, human rights in Islam, foundations of the Muslim family, and the place of family in Islamic society."
+        },
+        {
+          "course_code": "CS470",
+          "course_title": "Human Computer Interaction",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS352"],
+          "description": "This course introduces basics of Human Computer Interaction (HCI). It covers the process of interaction design highlighting cognitive, social, and emotional aspects of HCI. Topics include data gathering, analysis, and interpretation techniques, discovering requirements for user interfaces, user interaction design, construction, and evaluation techniques and models. Students apply knowledge in assignments and projects to deliver usable user interfaces."
+        },
+        {
+          "course_code": "CS471",
+          "course_title": "Computer Security",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS360"],
+          "description": "This course covers concepts and practices of computer security. Topics include identifying threats to computer systems and networks, assessing risks associated with adversary attacks, and developing effective countermeasures. Students learn about security protocols, encryption, authentication, access control, network security, malware, and security management practices."
+        },
+        {
+          "course_code": "CS479",
+          "course_title": "Senior Project 1 in Computer Science",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS350", "CS352"],
+          "description": "This course equips undergraduate Computer Science students with the basic skills to conduct research in the relevant field. Topics include techniques for conducting research, implementing systems, writing technical reports, and presentation skills. Students select their projects, understand the research process, and learn tools needed to support implementing and documenting systems. Research methods covered include experiments, survey, interview, and simulations."
+        },
+        {
+          "course_code": "CS489",
+          "course_title": "Senior Project 2 in Computer Science",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": ["CS479"],
+          "description": "This is a continuation of the graduation project started in CS479. Focus is on low-level design, implementation, testing, quality assurance, and project management. The outcome must be a significant software system, employing knowledge gained from courses throughout the curriculum. Students deliver code, a final report, a presentation, and a demo."
+        },
+        {
+          "course_code": "CS480",
+          "course_title": "Project Management in Computing",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": ["CS352"],
+          "description": "This course provides knowledge and skills for performing as project managers in the field of computing. Topics include basic concepts of project management: initiating, planning, controlling, executing, and closing projects. The course covers how computing projects should be managed from inception to post-implementation review, including defining project scope, creating project plans, and managing within budget and schedule."
+        },
+        {
+          "course_code": "CS481",
+          "course_title": "Professional Ethics in Computer Science",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": [],
+          "description": "This course develops understanding of professional ethics in technology, communication, computing, and government sectors. Topics include integrity, issues analysis, ethical decision planning and making, professional responsibilities of computer scientists, intellectual property, privacy, security ethics, and the impact of computing on society. Students learn to improve ethical decision-making in professional settings."
+        },
+        {
+          "course_code": "CS499",
+          "course_title": "Practical Training",
+          "credit_hours": 3,
+          "level": 8,
+          "prerequisites": [],
+          "description": "A summer period of 8 weeks spent as a trainee in industry, business, or government agencies. The purpose is to familiarize the student with the real job world and enable them to apply and relate academic knowledge to a real work environment. Requires passing 86 credit hours. Students submit field reports throughout the training period."
+        },
+        {
+          "course_code": "CS475",
+          "course_title": "Mobile Computing",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS363"],
+          "description": "This course develops competencies to plan, deploy, and secure mobile computing in a business environment. Topics include mobile computing architecture, Wireless Medium Access Control, CDMA, 3G and 4G Communication, Mobile IP Network Layer, Mobile Transport Layer, Data Dissemination, Data Synchronization, Mobile Wireless Short-Range Networks, Mobile Internet, and Mobile Application Languages (XML and Java)."
+        },
+        {
+          "course_code": "CS476",
+          "course_title": "Parallel and Distributed Computing",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS363"],
+          "description": "This course covers concepts and methods of parallel and distributed computing. Topics include introduction to parallel and distributed computing, principles of parallel programming platforms and algorithm design, performance and consistency, naming, analytical modeling of parallel programs, dense matrix algorithms, communication and coordination, and search algorithms for discrete optimization problems."
+        },
+        {
+          "course_code": "CS477",
+          "course_title": "Compiler Design",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS363"],
+          "description": "This course introduces fundamental concepts of compiler design. Topics include basic techniques of compiler construction and tools that perform syntax-directed translation of a high-level programming language into executable code. Students learn lexical analysis, parsing, semantic analysis, intermediate code generation, code optimization, and code generation."
+        },
+        {
+          "course_code": "CS478",
+          "course_title": "Computer Graphics",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS363"],
+          "description": "This course introduces the basic elements and algorithms of computer graphics including design, creation, and manipulation of graphics. Students learn about the different application domains of graphics. Students produce computer graphics applications which represent, manipulate, and display geometric information. Topics include 2D and 3D graphics, transformations, rendering, and graphics programming."
+        },
+        {
+          "course_code": "CS485",
+          "course_title": "Game Architecture and Design",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS363"],
+          "description": "This course introduces the architecture and design principles of game development. Topics include game engine architecture, game design principles and methodologies, game genres and mechanics, game physics, game AI, rendering pipelines, audio systems, and the game development process. Students design and prototype game concepts using modern game development tools."
+        },
+        {
+          "course_code": "CS486",
+          "course_title": "2D Game Programming",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS361"],
+          "description": "This course covers programming techniques for 2D game development. Topics include 2D game engines, sprite animation, tile maps, collision detection, game physics for 2D, input handling, game states, audio integration, and performance optimization. Students implement complete 2D games using industry-standard tools and frameworks."
+        },
+        {
+          "course_code": "CS487",
+          "course_title": "3D Game Programming",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS361"],
+          "description": "This course covers programming techniques for 3D game development. Topics include 3D game engines, 3D modeling and rendering, lighting and shading, camera systems, 3D physics, character animation, terrain generation, and optimization for real-time 3D graphics. Students implement complete 3D games using industry-standard game development environments."
+        },
+        {
+          "course_code": "CS488",
+          "course_title": "Game Artificial Intelligence",
+          "credit_hours": 3,
+          "level": 7,
+          "prerequisites": ["CS362"],
+          "description": "This course covers artificial intelligence techniques specifically applied to game development. Topics include game AI architecture, pathfinding algorithms (A*, navigation meshes), finite state machines, behavior trees, decision making, game theory and strategic AI, procedural content generation, player modeling, and adaptive game AI. Students implement AI systems in game projects."
+        }
+      ]
+    }
+  ]
+}

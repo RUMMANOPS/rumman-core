@@ -8,6 +8,11 @@ from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import PeerChannel, PeerChat, PeerUser
+from telethon.errors import (
+    AuthKeyDuplicatedError,
+    FloodWaitError,
+    RPCError,
+)
 
 load_dotenv()
 
@@ -385,6 +390,26 @@ async def resolve_entity(client: TelegramClient, chat_id: int, chat_type: str):
     return await client.get_entity(chat_id)
 
 
+async def save_partial_progress(http, job, processed, last_id, oldest_id, max_id):
+    """Save mid-batch progress and release the lease so the job retries."""
+    await rest_patch(
+        http,
+        "telegram_backfill_jobs",
+        {"id": f"eq.{job['id']}", "worker_id": f"eq.{WORKER_ID}"},
+        {
+            "total_processed": (job.get("total_processed") or 0) + processed,
+            "last_processed_message_id": last_id or max_id,
+            "oldest_reached_message_id": oldest_id or max_id,
+            "status": "pending",
+            "worker_id": None,
+            "locked_at": None,
+            "lease_expires_at": None,
+            "heartbeat_at": utc_now(),
+            "updated_at": utc_now(),
+        },
+    )
+
+
 async def process_job(client, http, job):
     chat_id = int(job["platform_chat_id"])
     chat_name = job.get("chat_name") or "Unknown"
@@ -411,32 +436,49 @@ async def process_job(client, http, job):
         flush=True,
     )
 
-    async for msg in client.iter_messages(entity, **kwargs):
-        processed += 1
-        last_id = msg.id
-        oldest_id = msg.id if oldest_id is None else min(oldest_id, msg.id)
+    try:
+        async for msg in client.iter_messages(entity, **kwargs):
+            processed += 1
+            last_id = msg.id
+            oldest_id = msg.id if oldest_id is None else min(oldest_id, msg.id)
 
-        mt = message_type(msg)
-        fm = file_meta(msg)
-        payload = await build_payload(msg, chat_name, chat_type, chat_id)
-        result = await rest_post(http, "messages", payload)
+            mt = message_type(msg)
+            fm = file_meta(msg)
+            payload = await build_payload(msg, chat_name, chat_type, chat_id)
+            result = await rest_post(http, "messages", payload)
 
-        if result == "inserted":
-            inserted += 1
-            # Only spawn media jobs for freshly inserted messages — duplicates were
-            # either already queued by the live listener or processed in a prior batch.
-            if mt not in ("text", "poll", "other"):
-                await maybe_spawn_media_job(http, msg, mt, fm, chat_id, chat_type)
-                media_queued += 1
-        elif result == "duplicate":
-            duplicate += 1
+            if result == "inserted":
+                inserted += 1
+                # Only spawn media jobs for freshly inserted messages — duplicates were
+                # either already queued by the live listener or processed in a prior batch.
+                if mt not in ("text", "poll", "other"):
+                    await maybe_spawn_media_job(http, msg, mt, fm, chat_id, chat_type)
+                    media_queued += 1
+            elif result == "duplicate":
+                duplicate += 1
 
-        if processed % 100 == 0:
-            await heartbeat(http, job["id"])
-            print(
-                f"BACKFILL_PROGRESS | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | media_queued={media_queued}",
-                flush=True,
-            )
+            if processed % 100 == 0:
+                await heartbeat(http, job["id"])
+                print(
+                    f"BACKFILL_PROGRESS | chat={chat_name} | processed={processed} | inserted={inserted} | duplicate={duplicate} | media_queued={media_queued}",
+                    flush=True,
+                )
+
+    except (FloodWaitError,) as e:
+        wait = getattr(e, "seconds", 60)
+        print(f"FLOOD_WAIT | chat={chat_name} | wait={wait}s | saving_partial", flush=True)
+        await save_partial_progress(http, job, processed, last_id, oldest_id, max_id)
+        await asyncio.sleep(wait + 5)
+        return  # outer loop will re-claim
+
+    except Exception as e:
+        # Disconnect / connection errors — save whatever we got and let main() reconnect
+        err_str = str(e).lower()
+        if "disconnect" in err_str or "connection" in err_str or "not connected" in err_str:
+            print(f"BACKFILL_DISCONNECT | chat={chat_name} | saved={processed} | {e}", flush=True)
+            await save_partial_progress(http, job, processed, last_id, oldest_id, max_id)
+            raise  # bubbles to main() reconnect loop
+        raise  # other errors bubble to fail_job
 
     done = processed == 0
 
@@ -459,37 +501,75 @@ async def process_job(client, http, job):
 
 
 NO_JOBS_SLEEP_SECONDS = 30
+RECONNECT_SLEEP_SECONDS = 15
+
+
+def _is_disconnect(e: Exception) -> bool:
+    s = str(e).lower()
+    return "disconnect" in s or "connection" in s or "not connected" in s
 
 
 async def main():
     print("TELEGRAM BACKFILL WORKER STARTING", flush=True)
 
-    client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"],
-    )
-
-    await client.start()
-    me = await client.get_me()
-    print(f"LOGGED_IN: {me.id}", flush=True)
-
-    async with httpx.AsyncClient(timeout=60) as http:
+    async with httpx.AsyncClient(timeout=120) as http:
         while True:
-            job = await claim_job(http)
-
-            if not job:
-                await asyncio.sleep(NO_JOBS_SLEEP_SECONDS)
-                continue
-
+            client = TelegramClient(
+                StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
+                int(os.environ["TELEGRAM_API_ID"]),
+                os.environ["TELEGRAM_API_HASH"],
+            )
             try:
-                await process_job(client, http, job)
-            except Exception as e:
-                print("BACKFILL_JOB_ERROR", str(e), flush=True)
-                await fail_job(http, job, e)
+                await asyncio.wait_for(client.connect(), timeout=30)
+                if not await client.is_user_authorized():
+                    print("NOT_AUTHORIZED — check TELEGRAM_SESSION_STRING", flush=True)
+                    return
 
-    await client.disconnect()
-    print("TELEGRAM BACKFILL WORKER STOPPED", flush=True)
+                me = await client.get_me()
+                print(f"LOGGED_IN: {me.id}", flush=True)
+
+                # Prime entity cache so PeerChannel lookups succeed without access_hash errors
+                print("PRIMING_ENTITY_CACHE", flush=True)
+                await client.get_dialogs(limit=300)
+                print("ENTITY_CACHE_READY", flush=True)
+
+                while True:
+                    job = await claim_job(http)
+
+                    if not job:
+                        await asyncio.sleep(NO_JOBS_SLEEP_SECONDS)
+                        continue
+
+                    try:
+                        await process_job(client, http, job)
+                    except AuthKeyDuplicatedError as e:
+                        print(f"AUTH_KEY_DUPLICATED | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+                        # process_job already saved partial progress; break inner to reconnect
+                        break
+                    except Exception as e:
+                        if _is_disconnect(e):
+                            # process_job saved partial progress; reconnect
+                            print(f"RECONNECTING | {e}", flush=True)
+                            break
+                        print(f"BACKFILL_JOB_ERROR | job={job['id']} | {e}", flush=True)
+                        await fail_job(http, job, e)
+
+            except AuthKeyDuplicatedError:
+                print(f"AUTH_KEY_DUPLICATED_at_connect | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+            except (asyncio.TimeoutError, OSError, ConnectionError) as e:
+                print(f"CONNECT_FAILED | {e} | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+            except Exception as e:
+                if _is_disconnect(e):
+                    print(f"OUTER_DISCONNECT | {e} | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+                else:
+                    print(f"OUTER_ERROR | {e}", flush=True)
+            finally:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    pass
+
+            await asyncio.sleep(RECONNECT_SLEEP_SECONDS)
 
 
 asyncio.run(main())

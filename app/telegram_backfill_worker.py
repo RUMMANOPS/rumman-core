@@ -333,7 +333,7 @@ JOB_TARGET_TABLE = {
 }
 
 
-async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload: dict) -> bool:
+async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload: dict, target_key: str) -> bool:
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/processing_jobs",
         headers=HEADERS,
@@ -343,12 +343,13 @@ async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload:
             "payload": payload,
             "retry_count": 0,
             "target_table": JOB_TARGET_TABLE.get(job_type, "messages"),
+            "target_key": target_key,
         },
     )
     if r.status_code == 409:
         return True  # already queued
     if r.status_code >= 400:
-        print(f"PROCESSING_JOB_CREATE_ERROR | type={job_type} | status={r.status_code}", flush=True)
+        print(f"PROCESSING_JOB_CREATE_ERROR | type={job_type} | status={r.status_code} | {r.text[:120]}", flush=True)
         return False
     return True
 
@@ -363,12 +364,13 @@ async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict,
         "caption": (msg.message or "")[:500],
     }
 
+    key = str(msg.id)
     if mt in ("voice", "audio"):
-        await create_processing_job(http, "audio_transcribe", base)
+        await create_processing_job(http, "audio_transcribe", base, target_key=key)
     elif mt == "file" and is_pdf(fm):
-        await create_processing_job(http, "telegram_media", {**base, "media_type": "pdf"})
+        await create_processing_job(http, "telegram_media", {**base, "media_type": "pdf"}, target_key=key)
     elif is_image(mt, fm):
-        await create_processing_job(http, "telegram_media", {**base, "media_type": "image"})
+        await create_processing_job(http, "telegram_media", {**base, "media_type": "image"}, target_key=key)
 
 
 async def resolve_entity(client: TelegramClient, chat_id: int, chat_type: str):

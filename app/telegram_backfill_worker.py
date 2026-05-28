@@ -354,11 +354,12 @@ async def create_processing_job(http: httpx.AsyncClient, job_type: str, payload:
     return True
 
 
-async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict, chat_id: int):
+async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict, chat_id: int, chat_type: str):
     """Create a processing_job for actionable media found during backfill."""
     base = {
         "platform_chat_id": str(chat_id),
         "platform_message_id": str(msg.id),
+        "chat_type": chat_type,
         "file_name": fm.get("file_name"),
         "mime_type": fm.get("mime_type"),
         "caption": (msg.message or "")[:500],
@@ -425,7 +426,7 @@ async def process_job(client, http, job):
             # Only spawn media jobs for freshly inserted messages — duplicates were
             # either already queued by the live listener or processed in a prior batch.
             if mt not in ("text", "poll", "other"):
-                await maybe_spawn_media_job(http, msg, mt, fm, chat_id)
+                await maybe_spawn_media_job(http, msg, mt, fm, chat_id, chat_type)
                 media_queued += 1
         elif result == "duplicate":
             duplicate += 1

@@ -7,6 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.sessions import StringSession
+from telethon.tl.types import PeerChannel, PeerChat
 
 load_dotenv()
 
@@ -109,7 +110,17 @@ async def process_job(client, http, job):
     try:
         await update_job(http, job_id, "processing")
 
-        entity = await client.get_entity(int(platform_chat_id))
+        chat_type = payload.get("chat_type", "")
+        cid = int(platform_chat_id)
+        if chat_type in ("channel", "megagroup"):
+            entity = await client.get_entity(PeerChannel(cid))
+        elif chat_type == "group":
+            entity = await client.get_entity(PeerChat(cid))
+        else:
+            try:
+                entity = await client.get_entity(cid)
+            except Exception:
+                entity = await client.get_entity(PeerChannel(cid))
         msg = await client.get_messages(entity, ids=int(platform_message_id))
 
         if not msg:

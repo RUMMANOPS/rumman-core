@@ -36,7 +36,71 @@ app = FastAPI(title="RUMMAN Search API", version="1.0")
 ai  = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
-MIN_SIMILARITY = 0.35  # discard results below this threshold
+MIN_SIMILARITY = 0.45  # discard results below this threshold
+
+
+# Gulf dialect → MSA substitution table for query normalization.
+# Keys are exact word matches (Arabic, no diacritics). Applied before embedding
+# so dialect queries hit the same vector space as MSA-indexed content.
+_DIALECT_MSA: dict[str, str] = {
+    # question words
+    "وش":       "ماذا",
+    "شو":       "ماذا",
+    "ايش":      "ماذا",
+    "إيش":      "ماذا",
+    "ليش":      "لماذا",
+    "ليه":      "لماذا",
+    "كيف":      "كيف",   # same, keep
+    "وين":      "أين",
+    "فين":      "أين",
+    # verbs
+    "يجي":      "يأتي",
+    "يجيب":     "يأتي",
+    "جاب":      "أحضر",
+    "يطلع":     "يظهر",
+    "طلع":      "ظهر",
+    "يحط":      "يضع",
+    "حط":       "وضع",
+    "يشوف":     "يرى",
+    "شاف":      "رأى",
+    "يعطي":     "يعطي",  # same
+    "يعطيك":    "يعطيك", # same
+    "اعطني":    "أعطني",
+    "ابغى":     "أريد",
+    "بغيت":     "أردت",
+    "بدي":      "أريد",
+    "بدك":      "تريد",
+    # particles / prepositions
+    "بالاختبار":  "في الاختبار",
+    "بالامتحان":  "في الامتحان",
+    "بالميدترم":  "في الميدترم",
+    "بالفاينل":   "في الفاينل",
+    "بالكورس":    "في المقرر",
+    # common exam vocabulary
+    "ميدترم":   "اختبار منتصف الفصل",
+    "فاينل":    "اختبار نهاية الفصل",
+    "كورس":     "مقرر",
+    "كويز":     "اختبار قصير",
+    "اسايمنت":  "واجب",
+    "برجكت":    "مشروع",
+    # informal connectors
+    "مو":       "ليس",
+    "ما هو":    "ما هو",  # same
+    "هو ايش":  "ما هو",
+}
+
+
+def _normalize_query(query: str) -> str:
+    """Replace Gulf dialect tokens with MSA equivalents before embedding."""
+    words = query.split()
+    normalized = [_DIALECT_MSA.get(w, w) for w in words]
+    result = " ".join(normalized)
+    # Multi-word phrase substitutions (run after per-word pass)
+    result = result.replace("شو جاء", "ما الذي جاء")
+    result = result.replace("وش جاء", "ما الذي جاء")
+    result = result.replace("شو يجي", "ما الذي يأتي")
+    result = result.replace("وش يجي", "ما الذي يأتي")
+    return result
 
 
 def _deduplicate(results: list[dict], limit: int) -> list[dict]:
@@ -64,9 +128,10 @@ def health():
 
 @app.post("/search")
 async def search(req: SearchRequest):
-    # 1. Embed the query
+    # 1. Normalize dialect Arabic → MSA, then embed
+    normalized_query = _normalize_query(req.query)
     resp = await ai.embeddings.create(
-        model=EMBED_MODEL, input=req.query, dimensions=EMBED_DIMS
+        model=EMBED_MODEL, input=normalized_query, dimensions=EMBED_DIMS
     )
     embedding = resp.data[0].embedding
 
@@ -94,8 +159,9 @@ async def search(req: SearchRequest):
     results  = _deduplicate(filtered, req.limit)
 
     return {
-        "query":        req.query,
-        "count":        len(results),
-        "raw_fetched":  len(raw),
-        "results":      results,
+        "query":            req.query,
+        "normalized_query": normalized_query if normalized_query != req.query else None,
+        "count":            len(results),
+        "raw_fetched":      len(raw),
+        "results":          results,
     }

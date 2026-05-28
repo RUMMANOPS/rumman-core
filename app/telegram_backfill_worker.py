@@ -429,6 +429,9 @@ async def process_job(client, http, job):
         await asyncio.sleep(BATCH_SLEEP_SECONDS)
 
 
+NO_JOBS_SLEEP_SECONDS = 30
+
+
 async def main():
     print("TELEGRAM BACKFILL WORKER STARTING", flush=True)
 
@@ -443,17 +446,18 @@ async def main():
     print(f"LOGGED_IN: {me.id}", flush=True)
 
     async with httpx.AsyncClient(timeout=60) as http:
-        job = await claim_job(http)
+        while True:
+            job = await claim_job(http)
 
-        if not job:
-            await client.disconnect()
-            return
+            if not job:
+                await asyncio.sleep(NO_JOBS_SLEEP_SECONDS)
+                continue
 
-        try:
-            await process_job(client, http, job)
-        except Exception as e:
-            print("BACKFILL_JOB_ERROR", str(e), flush=True)
-            await fail_job(http, job, e)
+            try:
+                await process_job(client, http, job)
+            except Exception as e:
+                print("BACKFILL_JOB_ERROR", str(e), flush=True)
+                await fail_job(http, job, e)
 
     await client.disconnect()
     print("TELEGRAM BACKFILL WORKER STOPPED", flush=True)

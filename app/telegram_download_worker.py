@@ -30,6 +30,7 @@ from openai import AsyncOpenAI
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.types import PeerChannel, PeerChat
+from telethon.errors import AuthKeyDuplicatedError
 
 load_dotenv()
 
@@ -421,40 +422,63 @@ async def handle_telegram_media(client: TelegramClient, ai: AsyncOpenAI,
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
+CONNECT_RETRY_SECONDS = 60  # wait before retrying after AuthKeyDuplicatedError
+
+
 async def main():
     log("DOWNLOAD_WORKER_START", max_retries=MAX_RETRIES)
 
-    client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"],
-    )
-    await asyncio.wait_for(client.connect(), timeout=30)
-    if not await client.is_user_authorized():
-        log("SESSION_NOT_AUTHORIZED")
-        return
-
-    me = await client.get_me()
-    log("DOWNLOAD_WORKER_READY", user_id=me.id)
-
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
-    async with httpx.AsyncClient(timeout=120) as http:
-        while True:
-            jobs = await get_pending_jobs(http)
-            if not jobs:
-                await asyncio.sleep(SLEEP_SECONDS)
-                continue
+    while True:
+        client = TelegramClient(
+            StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
+            int(os.environ["TELEGRAM_API_ID"]),
+            os.environ["TELEGRAM_API_HASH"],
+        )
+        try:
+            await asyncio.wait_for(client.connect(), timeout=30)
 
-            log("JOBS_FETCHED", count=len(jobs))
-            for job in jobs:
-                jtype = job.get("job_type")
-                if jtype == "audio_transcribe":
-                    await handle_audio_transcribe(client, http, job)
-                elif jtype == "telegram_media":
-                    await handle_telegram_media(client, ai, http, job)
-                else:
-                    log("UNKNOWN_JOB_TYPE", job_type=jtype, id=job["id"])
+            if not await client.is_user_authorized():
+                log("SESSION_NOT_AUTHORIZED")
+                await client.disconnect()
+                return
+
+            me = await client.get_me()
+            log("DOWNLOAD_WORKER_READY", user_id=me.id)
+
+            async with httpx.AsyncClient(timeout=120) as http:
+                while True:
+                    jobs = await get_pending_jobs(http)
+                    if not jobs:
+                        await asyncio.sleep(SLEEP_SECONDS)
+                        continue
+
+                    log("JOBS_FETCHED", count=len(jobs))
+                    for job in jobs:
+                        jtype = job.get("job_type")
+                        if jtype == "audio_transcribe":
+                            await handle_audio_transcribe(client, http, job)
+                        elif jtype == "telegram_media":
+                            await handle_telegram_media(client, ai, http, job)
+                        else:
+                            log("UNKNOWN_JOB_TYPE", job_type=jtype, id=job["id"])
+
+        except AuthKeyDuplicatedError:
+            log("AUTH_KEY_DUPLICATED_retry_in", seconds=CONNECT_RETRY_SECONDS)
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            await asyncio.sleep(CONNECT_RETRY_SECONDS)
+
+        except Exception as e:
+            log("UNEXPECTED_ERROR", error=str(e)[:200])
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise
 
 
 if __name__ == "__main__":

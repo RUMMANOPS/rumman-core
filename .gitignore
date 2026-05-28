@@ -9,3 +9,4 @@ logs/
 placeholder
 archive_old/
 auth_session.py
+.claude/

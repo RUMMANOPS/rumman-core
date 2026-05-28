@@ -1,0 +1,356 @@
+[
+  {
+    "surface": "وش",
+    "canonical": "ما",
+    "category": "question_word",
+    "notes": "Used to ask 'what' in Gulf dialect."
+  },
+  {
+    "surface": "شو",
+    "canonical": "ما",
+    "category": "question_word",
+    "notes": "Alternative for 'what' in some Gulf regions."
+  },
+  {
+    "surface": "ايش",
+    "canonical": "ما",
+    "category": "question_word",
+    "notes": "Commonly used for 'what' in Saudi dialect."
+  },
+  {
+    "surface": "ليش",
+    "canonical": "لماذا",
+    "category": "question_word",
+    "notes": "Used to ask 'why' in Gulf dialect."
+  },
+  {
+    "surface": "وين",
+    "canonical": "أين",
+    "category": "question_word",
+    "notes": "Used to ask 'where' in Gulf dialect."
+  },
+  {
+    "surface": "مين",
+    "canonical": "من",
+    "category": "question_word",
+    "notes": "Used to ask 'who' in Gulf dialect."
+  },
+  {
+    "surface": "متين",
+    "canonical": "متى",
+    "category": "question_word",
+    "notes": "Used to ask 'when' in some Gulf regions."
+  },
+  {
+    "surface": "كيفاش",
+    "canonical": "كيف",
+    "category": "question_word",
+    "notes": "Used to ask 'how' in some Gulf regions."
+  },
+  {
+    "surface": "يجي",
+    "canonical": "يأتي",
+    "category": "verb",
+    "notes": "Common verb meaning 'to come'."
+  },
+  {
+    "surface": "يطلع",
+    "canonical": "يخرج",
+    "category": "verb",
+    "notes": "Common verb meaning 'to go out'."
+  },
+  {
+    "surface": "يشوف",
+    "canonical": "يرى",
+    "category": "verb",
+    "notes": "Common verb meaning 'to see'."
+  },
+  {
+    "surface": "يحط",
+    "canonical": "يضع",
+    "category": "verb",
+    "notes": "Common verb meaning 'to put'."
+  },
+  {
+    "surface": "يقلّب",
+    "canonical": "يقلب",
+    "category": "verb",
+    "notes": "Common verb meaning 'to flip'."
+  },
+  {
+    "surface": "ابغى",
+    "canonical": "أريد",
+    "category": "verb",
+    "notes": "Common verb meaning 'I want'."
+  },
+  {
+    "surface": "بدي",
+    "canonical": "أريد",
+    "category": "verb",
+    "notes": "Alternative for 'I want' in some Gulf regions."
+  },
+  {
+    "surface": "نبي",
+    "canonical": "نريد",
+    "category": "verb",
+    "notes": "Common verb meaning 'we want'."
+  },
+  {
+    "surface": "مو",
+    "canonical": "ليس",
+    "category": "negation",
+    "notes": "Common negation form in Gulf dialect."
+  },
+  {
+    "surface": "مافي",
+    "canonical": "لا يوجد",
+    "category": "negation",
+    "notes": "Common negation form meaning 'there is not'."
+  },
+  {
+    "surface": "ماعندي",
+    "canonical": "ليس لدي",
+    "category": "negation",
+    "notes": "Common negation form meaning 'I don't have'."
+  },
+  {
+    "surface": "ما راح",
+    "canonical": "لن",
+    "category": "negation",
+    "notes": "Common negation form for future tense."
+  },
+  {
+    "surface": "بالاختبار",
+    "canonical": "في الاختبار",
+    "category": "preposition",
+    "notes": "Preposition used with 'test'."
+  },
+  {
+    "surface": "بالفصل",
+    "canonical": "في الفصل",
+    "category": "preposition",
+    "notes": "Preposition used with 'class'."
+  },
+  {
+    "surface": "عالكورس",
+    "canonical": "على المقرر",
+    "category": "preposition",
+    "notes": "Preposition used with 'course'."
+  },
+  {
+    "surface": "للاسايمنت",
+    "canonical": "للمهمة",
+    "category": "preposition",
+    "notes": "Preposition used with 'assignment'."
+  },
+  {
+    "surface": "ميدترم",
+    "canonical": "امتحان منتصف الفصل",
+    "category": "exam_term",
+    "notes": "Term for 'midterm exam'."
+  },
+  {
+    "surface": "فاينل",
+    "canonical": "الامتحان النهائي",
+    "category": "exam_term",
+    "notes": "Term for 'final exam'."
+  },
+  {
+    "surface": "كويز",
+    "canonical": "اختبار قصير",
+    "category": "exam_term",
+    "notes": "Term for 'quiz'."
+  },
+  {
+    "surface": "تجميعات",
+    "canonical": "ملخصات",
+    "category": "exam_term",
+    "notes": "Term for 'collections of notes'."
+  },
+  {
+    "surface": "شيت",
+    "canonical": "ورقة",
+    "category": "exam_term",
+    "notes": "Term for 'sheet'."
+  },
+  {
+    "surface": "اوراق",
+    "canonical": "أوراق",
+    "category": "exam_term",
+    "notes": "Term for 'papers'."
+  },
+  {
+    "surface": "كورس",
+    "canonical": "مقرر",
+    "category": "resource",
+    "notes": "Term for 'course'."
+  },
+  {
+    "surface": "اسايمنت",
+    "canonical": "مهمة",
+    "category": "resource",
+    "notes": "Term for 'assignment'."
+  },
+  {
+    "surface": "برجكت",
+    "canonical": "مشروع",
+    "category": "resource",
+    "notes": "Term for 'project'."
+  },
+  {
+    "surface": "سلايدات",
+    "canonical": "شرائح",
+    "category": "resource",
+    "notes": "Term for 'slides'."
+  },
+  {
+    "surface": "نوتس",
+    "canonical": "ملاحظات",
+    "category": "resource",
+    "notes": "Term for 'notes'."
+  },
+  {
+    "surface": "بلاكبورد",
+    "canonical": "نظام التعليم الإلكتروني",
+    "category": "resource",
+    "notes": "Term for 'Blackboard'."
+  },
+  {
+    "surface": "دكتور",
+    "canonical": "أستاذ",
+    "category": "person",
+    "notes": "Title for male professor."
+  },
+  {
+    "surface": "دكتورة",
+    "canonical": "أستاذة",
+    "category": "person",
+    "notes": "Title for female professor."
+  },
+  {
+    "surface": "الاستاذ",
+    "canonical": "الأستاذ",
+    "category": "person",
+    "notes": "Title for male teacher."
+  },
+  {
+    "surface": "المشرف",
+    "canonical": "المشرف الأكاديمي",
+    "category": "person",
+    "notes": "Title for academic supervisor."
+  },
+  {
+    "surface": "خلص ما في وقت",
+    "canonical": "انتهى الوقت",
+    "category": "urgency",
+    "notes": "Phrase indicating no more time."
+  },
+  {
+    "surface": "ما راح يجي",
+    "canonical": "لن يأتي",
+    "category": "urgency",
+    "notes": "Phrase indicating someone won't come."
+  },
+  {
+    "surface": "والله خايف",
+    "canonical": "أنا خائف",
+    "category": "urgency",
+    "notes": "Phrase expressing fear or anxiety."
+  },
+  {
+    "surface": "وين الملخص",
+    "canonical": "أين الملخص",
+    "category": "resource",
+    "notes": "Asking for the summary."
+  },
+  {
+    "surface": "ابغى شيت",
+    "canonical": "أريد ورقة",
+    "category": "resource",
+    "notes": "Requesting a sheet."
+  },
+  {
+    "surface": "فيه تجميعات",
+    "canonical": "هل توجد ملخصات",
+    "category": "resource",
+    "notes": "Asking if there are summaries."
+  },
+  {
+    "surface": "ما فهمت",
+    "canonical": "لم أفهم",
+    "category": "comprehension",
+    "notes": "Expressing lack of understanding."
+  },
+  {
+    "surface": "يعني ايش",
+    "canonical": "ماذا يعني",
+    "category": "comprehension",
+    "notes": "Asking for clarification."
+  },
+  {
+    "surface": "وش يقصد",
+    "canonical": "ماذا يقصد",
+    "category": "comprehension",
+    "notes": "Asking what someone means."
+  },
+  {
+    "surface": "انا fail",
+    "canonical": "لقد رسبت",
+    "category": "mixed",
+    "notes": "Expressing failure in a course."
+  },
+  {
+    "surface": "الكورس heavy",
+    "canonical": "المقرر صعب",
+    "category": "mixed",
+    "notes": "Describing a course as difficult."
+  },
+  {
+    "surface": "الداكتر strict",
+    "canonical": "الأستاذ صارم",
+    "category": "mixed",
+    "notes": "Describing a professor as strict."
+  },
+  {
+    "surface": "الميدترم",
+    "canonical": "امتحان منتصف الفصل",
+    "category": "definite_article",
+    "notes": "Referring to the midterm exam."
+  },
+  {
+    "surface": "الفاينل",
+    "canonical": "الامتحان النهائي",
+    "category": "definite_article",
+    "notes": "Referring to the final exam."
+  },
+  {
+    "surface": "الكويز",
+    "canonical": "الاختبار القصير",
+    "category": "definite_article",
+    "notes": "Referring to the quiz."
+  },
+  {
+    "surface": "الاسايمنت",
+    "canonical": "المهمة",
+    "category": "definite_article",
+    "notes": "Referring to the assignment."
+  },
+  {
+    "surface": "امتى التسليم",
+    "canonical": "متى موعد التسليم",
+    "category": "deadline",
+    "notes": "Asking about the submission deadline."
+  },
+  {
+    "surface": "قبل الميدترم",
+    "canonical": "قبل امتحان منتصف الفصل",
+    "category": "deadline",
+    "notes": "Referring to a time before the midterm."
+  },
+  {
+    "surface": "بعد الفاينل",
+    "canonical": "بعد الامتحان النهائي",
+    "category": "deadline",
+    "notes": "Referring to a time after the final exam."
+  }
+]

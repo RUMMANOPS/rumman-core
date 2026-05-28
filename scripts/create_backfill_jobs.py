@@ -144,14 +144,8 @@ async def create_backfill_job(http: httpx.AsyncClient, chat: dict, score: int) -
             "chat_name": chat["chat_name"],
             "chat_type": chat["chat_type"],
             "status": "pending",
-            "priority": score,
             "batch_size": 500,
             "retry_count": 0,
-            "metadata": {
-                "score": score,
-                "msg_count_at_creation": chat["msg_count"],
-                "created_by": "create_backfill_jobs.py",
-            },
         },
     )
     if r.status_code == 409:

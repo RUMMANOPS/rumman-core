@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
 """
-create_backfill_jobs.py — Score Telegram dialogs and queue high-value ones for backfill.
+create_backfill_jobs.py — Score known chats and queue them for backfill.
 
-Connects to Telegram via Telethon, lists all dialogs, scores each by academic value,
-and inserts telegram_backfill_jobs rows for the ones worth processing.
+Queries the messages table for all distinct chats already seen by the listener,
+scores each by academic value, and inserts telegram_backfill_jobs rows.
+
+No Telethon connection needed — works while the Railway listener is running.
 
 Scoring:
   +30  name contains a course code (CS350, MGT311, …)
   +20  name contains academic keywords (exam, quiz, midterm, final, …)
-  +15  dialog is a channel or megagroup (broadcast archive, not personal DM)
-  +10  recent messages include PDFs or photos (media-rich)
-  -20  dialog is a bot
-  -10  dialog is a private DM (no academic signal)
+  +15  chat_type is channel or megagroup
+  +10  >10% of sampled messages have media (PDF/photo-rich)
+  -10  chat_type is private (DM, no academic signal)
 
 Usage:
-    python3 scripts/create_backfill_jobs.py               # dry-run preview (no DB writes)
-    python3 scripts/create_backfill_jobs.py --commit      # actually create jobs
+    python3 scripts/create_backfill_jobs.py               # dry-run preview
+    python3 scripts/create_backfill_jobs.py --commit      # create jobs
     python3 scripts/create_backfill_jobs.py --min-score 30 --commit
-    python3 scripts/create_backfill_jobs.py --all --commit  # include score=0 dialogs
+    python3 scripts/create_backfill_jobs.py --all --commit  # queue everything
 
-Requires: TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_SESSION_STRING,
-          SUPABASE_URL, SUPABASE_KEY env vars.
+Requires: SUPABASE_URL, SUPABASE_KEY env vars.
 """
 
 import os
@@ -28,16 +28,9 @@ import re
 import sys
 import asyncio
 import argparse
-from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
-from telethon import TelegramClient
-from telethon.sessions import StringSession
-from telethon.tl.types import (
-    Channel, Chat, User,
-    InputPeerChannel, InputPeerChat,
-)
 
 load_dotenv()
 
@@ -60,7 +53,6 @@ ACADEMIC_KEYWORDS = re.compile(
 )
 
 DEFAULT_MIN_SCORE = 20
-PREVIEW_MESSAGES = 10  # how many recent messages to sample when scoring
 
 
 def log(event: str, **kwargs):
@@ -68,28 +60,9 @@ def log(event: str, **kwargs):
     print(" | ".join(parts), flush=True)
 
 
-def chat_type(dialog) -> str:
-    entity = dialog.entity
-    if isinstance(entity, Channel):
-        return "channel" if entity.broadcast else "megagroup"
-    if isinstance(entity, Chat):
-        return "group"
-    if isinstance(entity, User):
-        return "bot" if entity.bot else "private"
-    return "unknown"
-
-
-async def score_dialog(client: TelegramClient, dialog) -> tuple[int, dict]:
-    name = dialog.name or ""
-    ct = chat_type(dialog)
+def score_chat(name: str, chat_type: str, msg_count: int, media_count: int) -> tuple[int, list[str]]:
     score = 0
     reasons = []
-
-    if ct == "bot":
-        return -100, {"skip": "bot"}
-    if ct == "private":
-        score -= 10
-        reasons.append("private_dm")
 
     if COURSE_CODE_RE.search(name):
         score += 30
@@ -99,33 +72,56 @@ async def score_dialog(client: TelegramClient, dialog) -> tuple[int, dict]:
         score += 20
         reasons.append("academic_keyword_in_name")
 
-    if ct in ("channel", "megagroup"):
+    if chat_type in ("channel", "megagroup"):
         score += 15
-        reasons.append(ct)
+        reasons.append(chat_type)
+    elif chat_type == "private":
+        score -= 10
+        reasons.append("private_dm")
 
-    # Sample recent messages for media signals
-    try:
-        pdf_count = 0
-        photo_count = 0
-        async for msg in client.iter_messages(dialog, limit=PREVIEW_MESSAGES):
-            if msg.document:
-                f = getattr(msg, "file", None)
-                mime = getattr(f, "mime_type", "") or ""
-                name_f = getattr(f, "name", "") or ""
-                if "pdf" in mime.lower() or name_f.lower().endswith(".pdf"):
-                    pdf_count += 1
-            if msg.photo:
-                photo_count += 1
-        if pdf_count > 0:
-            score += 10
-            reasons.append(f"pdfs={pdf_count}")
-        if photo_count > 0:
-            score += 5
-            reasons.append(f"photos={photo_count}")
-    except Exception:
-        pass
+    if msg_count > 0 and media_count / msg_count > 0.10:
+        score += 10
+        reasons.append(f"media_rich={media_count}/{msg_count}")
 
-    return score, {"reasons": reasons, "chat_type": ct}
+    return score, reasons
+
+
+async def get_all_chats(http: httpx.AsyncClient) -> list[dict]:
+    """Aggregate distinct chats from messages table with message + media counts."""
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/messages",
+        headers=HEADERS,
+        params={
+            "select": "platform_chat_id,chat_name,telegram_chat_type,has_media",
+            "limit": "10000",
+            "order": "created_at.desc",
+        },
+    )
+    if r.status_code >= 400:
+        log("MESSAGES_FETCH_ERROR", status=r.status_code, error=r.text[:120])
+        return []
+
+    rows = r.json()
+
+    # Aggregate by chat_id
+    chats: dict[str, dict] = {}
+    for row in rows:
+        cid = row.get("platform_chat_id") or ""
+        if not cid:
+            continue
+        if cid not in chats:
+            chats[cid] = {
+                "platform_chat_id": cid,
+                "chat_name": row.get("chat_name") or "",
+                "chat_type": row.get("telegram_chat_type") or "unknown",
+                "msg_count": 0,
+                "media_count": 0,
+            }
+        chats[cid]["msg_count"] += 1
+        if row.get("has_media"):
+            chats[cid]["media_count"] += 1
+
+    return list(chats.values())
 
 
 async def get_existing_job_chat_ids(http: httpx.AsyncClient) -> set[str]:
@@ -139,108 +135,94 @@ async def get_existing_job_chat_ids(http: httpx.AsyncClient) -> set[str]:
     return {row["platform_chat_id"] for row in r.json()}
 
 
-async def create_backfill_job(http: httpx.AsyncClient, dialog, ct: str, score: int) -> str:
-    entity = dialog.entity
-    chat_id = str(dialog.id if not hasattr(entity, 'id') else entity.id)
-
-    # Telethon uses negative IDs for channels internally; normalize to positive
-    if chat_id.startswith("-100"):
-        chat_id = chat_id[4:]
-    elif chat_id.startswith("-"):
-        chat_id = chat_id[1:]
-
+async def create_backfill_job(http: httpx.AsyncClient, chat: dict, score: int) -> str:
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
         headers=HEADERS,
         json={
-            "platform_chat_id": chat_id,
-            "chat_name": dialog.name or "",
-            "chat_type": ct,
+            "platform_chat_id": chat["platform_chat_id"],
+            "chat_name": chat["chat_name"],
+            "chat_type": chat["chat_type"],
             "status": "pending",
             "priority": score,
             "batch_size": 500,
             "retry_count": 0,
-            "metadata": {"score": score, "created_by": "create_backfill_jobs.py"},
+            "metadata": {
+                "score": score,
+                "msg_count_at_creation": chat["msg_count"],
+                "created_by": "create_backfill_jobs.py",
+            },
         },
     )
     if r.status_code == 409:
         return "duplicate"
     if r.status_code >= 400:
-        log("JOB_CREATE_ERROR", chat=dialog.name, status=r.status_code, error=r.text[:120])
+        log("JOB_CREATE_ERROR", chat=chat["chat_name"],
+            status=r.status_code, error=r.text[:120])
         return "error"
     return "created"
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Queue Telegram dialogs for backfill")
-    parser.add_argument("--commit", action="store_true", help="Write to DB (default: dry-run)")
+    parser = argparse.ArgumentParser(description="Queue Telegram chats for backfill")
+    parser.add_argument("--commit", action="store_true",
+                        help="Write jobs to DB (default: dry-run)")
     parser.add_argument("--min-score", type=int, default=DEFAULT_MIN_SCORE,
                         help=f"Minimum score to queue (default: {DEFAULT_MIN_SCORE})")
     parser.add_argument("--all", action="store_true",
-                        help="Queue all dialogs regardless of score")
-    parser.add_argument("--limit", type=int, default=200,
-                        help="Max dialogs to inspect (default: 200)")
+                        help="Queue all chats regardless of score")
     args = parser.parse_args()
 
-    client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"],
-    )
-
-    await client.start()
-    me = await client.get_me()
-    log("LOGGED_IN", user_id=me.id, username=me.username)
-
     async with httpx.AsyncClient(timeout=60) as http:
-        existing = await get_existing_job_chat_ids(http) if args.commit else set()
+        log("FETCHING_CHATS")
+        chats = await get_all_chats(http)
+
+        if not chats:
+            print("No chats found in messages table. Run the listener first.", file=sys.stderr)
+            sys.exit(1)
+
+        log("CHATS_FOUND", count=len(chats))
+
+        existing = await get_existing_job_chat_ids(http)
         log("EXISTING_JOBS", count=len(existing))
 
-        candidates = []
-        skipped_bots = 0
+        # Score and sort
+        scored = []
+        for chat in chats:
+            score, reasons = score_chat(
+                chat["chat_name"], chat["chat_type"],
+                chat["msg_count"], chat["media_count"],
+            )
+            scored.append((score, chat, reasons))
 
-        log("SCANNING_DIALOGS", limit=args.limit)
-        count = 0
-        async for dialog in client.iter_dialogs(limit=args.limit):
-            count += 1
-            score, meta = await score_dialog(client, dialog)
-
-            if score == -100:
-                skipped_bots += 1
-                continue
-
-            ct = meta.get("chat_type", "unknown")
-            candidates.append((score, dialog, ct, meta))
-
-        candidates.sort(key=lambda x: x[0], reverse=True)
-
-        log("SCAN_DONE", total=count, scoreable=len(candidates), bots_skipped=skipped_bots)
+        scored.sort(key=lambda x: x[0], reverse=True)
 
         threshold = 0 if args.all else args.min_score
         queued = 0
         skipped_score = 0
         skipped_existing = 0
+        errors = 0
 
         print()
-        print(f"{'SCORE':>6}  {'TYPE':<12}  {'NAME'}")
-        print("-" * 60)
+        print(f"{'SCORE':>6}  {'TYPE':<12}  {'MSGS':>5}  {'MEDIA':>5}  NAME")
+        print("-" * 72)
 
-        for score, dialog, ct, meta in candidates:
-            entity = dialog.entity
-            raw_id = str(entity.id if hasattr(entity, 'id') else dialog.id)
-            norm_id = raw_id.lstrip("-").lstrip("100") if raw_id.startswith("-100") else raw_id.lstrip("-")
+        for score, chat, reasons in scored:
+            cid = chat["platform_chat_id"]
+            name = chat["chat_name"] or "(unnamed)"
+            ct = chat["chat_type"]
+            msgs = chat["msg_count"]
+            media = chat["media_count"]
+            reason_str = ", ".join(reasons)
 
-            reasons = ", ".join(meta.get("reasons", []))
-            marker = ""
-
-            if score < threshold:
-                skipped_score += 1
-                marker = "  (below threshold)"
-            elif norm_id in existing or raw_id in existing:
+            if cid in existing:
                 skipped_existing += 1
                 marker = "  (already queued)"
+            elif score < threshold:
+                skipped_score += 1
+                marker = "  (below threshold)"
             elif args.commit:
-                result = await create_backfill_job(http, dialog, ct, score)
+                result = await create_backfill_job(http, chat, score)
                 if result == "created":
                     queued += 1
                     marker = "  ✓ queued"
@@ -248,14 +230,15 @@ async def main():
                     skipped_existing += 1
                     marker = "  (already queued)"
                 else:
+                    errors += 1
                     marker = "  ✗ error"
             else:
-                marker = "  [dry-run]"
                 queued += 1
+                marker = "  [dry-run]"
 
-            print(f"{score:>6}  {ct:<12}  {dialog.name or '(unnamed)'}{marker}")
-            if reasons:
-                print(f"{'':>6}  {'':12}  → {reasons}")
+            print(f"{score:>6}  {ct:<12}  {msgs:>5}  {media:>5}  {name}{marker}")
+            if reason_str:
+                print(f"{'':>6}  {'':12}  {'':>5}  {'':>5}  → {reason_str}")
 
         print()
         log(
@@ -263,15 +246,13 @@ async def main():
             mode="commit" if args.commit else "dry-run",
             threshold=threshold,
             queued=queued,
-            skipped_score=skipped_score,
             skipped_existing=skipped_existing,
+            skipped_score=skipped_score,
+            errors=errors,
         )
 
         if not args.commit and queued > 0:
-            print()
-            print(f"Run with --commit to create {queued} backfill job(s).")
-
-    await client.disconnect()
+            print(f"\nRun with --commit to create {queued} backfill job(s).")
 
 
 if __name__ == "__main__":

@@ -30,15 +30,34 @@ SEARCH_API_URL = os.environ["SEARCH_API_URL"].rstrip("/")
 TG_BASE        = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 _NO_RESULTS = (
-    "ما لقيت نتائج في قاعدة البيانات لهذا السؤال.\n"
-    "جرّب تصيغ سؤالك بشكل مختلف أو اذكر رمز المادة."
+    "ما لقيت شي في قاعدة البيانات عن هذا السؤال.\n\n"
+    "جرّب:\n"
+    "• اذكر رمز المادة (مثل: IT362، MGT425)\n"
+    "• اسأل عن موضوع محدد (ميدترم، فاينل، ملخص)\n"
+    "• مثال: <i>وش يجي بالميدترم IT362</i>"
 )
-_ERROR = "حدث خطأ، حاول مرة ثانية. 🔄"
+_ERROR   = "حدث خطأ، حاول مرة ثانية."
 _WELCOME = (
     "أهلاً! أنا روّمان 📚\n\n"
     "أبحث لك في مواد وملخصات وتجميعات SEU.\n"
-    "أرسل سؤالك مباشرة — بالعربي أو بالإنجليزي."
+    "أرسل سؤالك مباشرة — بالعربي أو بالإنجليزي.\n\n"
+    "<b>أمثلة:</b>\n"
+    "• وش يجي بالميدترم IT362\n"
+    "• ابغى ملخص MGT425\n"
+    "• تجميعات FIN101 الفاينل"
 )
+_IDENTITY = (
+    "أنا روّمان 📚 — مساعد طلاب SEU.\n\n"
+    "أبحث في مواد الجامعة: تجميعات، ملخصات، أسئلة اختبارات.\n"
+    "اسألني عن أي مادة وأجيبك من قاعدة البيانات مباشرة."
+)
+
+_META_TRIGGERS = {
+    "من انت", "من أنت", "مين انت", "مين أنت",
+    "ايش انت", "ايش أنت", "وش انت", "وش أنت",
+    "what are you", "who are you",
+    "مرحبا", "مرحبً", "هلو", "هاي", "hi", "hello", "السلام عليكم",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -95,23 +114,16 @@ def _format_results(data: dict) -> str:
     lines: list[str] = []
     for i, row in enumerate(results[:3], 1):
         content = (row.get("content") or "").strip()
-        if len(content) > 280:
-            content = content[:277] + "..."
+        if len(content) > 300:
+            content = content[:297] + "..."
 
-        sim  = row.get("similarity", 0)
-        meta = row.get("metadata") or {}
+        meta    = row.get("metadata") or {}
         course  = meta.get("course_code") or row.get("course_code") or ""
-        srctype = meta.get("source_type") or row.get("source_type") or ""
+        tag     = f" <i>({course})</i>" if course else ""
 
-        tag_parts = [p for p in [course, srctype] if p]
-        tag = f" <i>({' · '.join(tag_parts)})</i>" if tag_parts else ""
+        lines.append(f"<b>{i}.{tag}</b>\n{content}")
 
-        lines.append(f"<b>{i}.</b>{tag}\n{content}")
-
-    normalized = data.get("normalized_query")
-    header = f"<i>تم البحث عن: {normalized}</i>\n\n" if normalized else ""
-
-    return header + "\n\n".join(lines)
+    return "\n\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +143,10 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         return
 
     if text.startswith("/"):
+        return
+
+    if text.lower().strip("؟?!.") in _META_TRIGGERS:
+        await _send(http, chat_id, _IDENTITY)
         return
 
     log.info("QUERY | chat=%d | q=%.60s", chat_id, text)

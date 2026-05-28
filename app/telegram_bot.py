@@ -5,16 +5,21 @@ telegram_bot.py — Student-facing Telegram bot for RUMMAN search.
 Long-polls Telegram Bot API, forwards every text message to the
 /search endpoint, and returns the top 3 grounded results.
 
+Platform identity:
+  Each chat_id is hashed as SHA-256(RUMMAN_USER_SALT:telegram:chat_id).
+  Raw chat IDs are never sent to or stored by the platform.
+
 Environment:
   TELEGRAM_BOT_TOKEN   — bot token from @BotFather
   SEARCH_API_URL       — internal Railway URL of the search service
-                         e.g. https://search.railway.internal:8000
-                         or   https://<public-domain>
+  RUMMAN_USER_SALT     — secret salt for user hash derivation
 """
 
 import os
 import asyncio
+import hashlib
 import logging
+import time
 import httpx
 from dotenv import load_dotenv
 
@@ -25,9 +30,15 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-BOT_TOKEN      = os.environ["TELEGRAM_BOT_TOKEN"]
-SEARCH_API_URL = os.environ["SEARCH_API_URL"].rstrip("/")
-TG_BASE        = f"https://api.telegram.org/bot{BOT_TOKEN}"
+BOT_TOKEN         = os.environ["TELEGRAM_BOT_TOKEN"]
+SEARCH_API_URL    = os.environ["SEARCH_API_URL"].rstrip("/")
+RUMMAN_USER_SALT  = os.environ.get("RUMMAN_USER_SALT", "")
+TG_BASE           = f"https://api.telegram.org/bot{BOT_TOKEN}"
+
+SESSION_LOCAL_TTL = 25 * 60  # local cache TTL; server TTL is 30 min
+
+_USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id
+_SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
 
 _NO_RESULTS = (
     "ما لقيت شي في قاعدة البيانات عن هذا السؤال.\n\n"
@@ -73,21 +84,98 @@ async def _typing(http: httpx.AsyncClient, chat_id: int) -> None:
     await _tg(http, "sendChatAction", chat_id=chat_id, action="typing")
 
 
-async def _send(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
+async def _send(
+    http: httpx.AsyncClient,
+    chat_id: int,
+    text: str,
+    reply_markup: dict | None = None,
+) -> None:
     if len(text) > 4096:
         text = text[:4093] + "..."
-    await _tg(http, "sendMessage", chat_id=chat_id, text=text, parse_mode="HTML")
+    kwargs: dict = {"chat_id": chat_id, "text": text, "parse_mode": "HTML"}
+    if reply_markup:
+        kwargs["reply_markup"] = reply_markup
+    await _tg(http, "sendMessage", **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# Platform identity helpers (fire-and-forget safe — return None on failure)
+# ---------------------------------------------------------------------------
+
+def _hash_user(chat_id: int) -> str:
+    return hashlib.sha256(
+        f"{RUMMAN_USER_SALT}:telegram:{chat_id}".encode()
+    ).hexdigest()
+
+
+async def _get_or_create_user(http: httpx.AsyncClient, chat_id: int) -> str | None:
+    if chat_id in _USER_CACHE:
+        return _USER_CACHE[chat_id]
+    try:
+        r = await http.post(
+            f"{SEARCH_API_URL}/v1/users/identify",
+            json={
+                "platform":           "telegram",
+                "platform_user_hash": _hash_user(chat_id),
+                "tenant_slug":        "seu",
+            },
+            timeout=5,
+        )
+        if r.status_code == 200:
+            user_id = r.json()["user_id"]
+            _USER_CACHE[chat_id] = user_id
+            return user_id
+    except Exception as exc:
+        log.warning("user_identify_failed | chat=%d | %s", chat_id, exc)
+    return None
+
+
+async def _get_or_create_session(
+    http: httpx.AsyncClient,
+    chat_id: int,
+    user_id: str,
+) -> str | None:
+    cached = _SESSION_CACHE.get(chat_id)
+    if cached and cached[1] > time.monotonic():
+        return cached[0]
+    try:
+        r = await http.post(
+            f"{SEARCH_API_URL}/v1/sessions",
+            json={
+                "user_id":     user_id,
+                "platform":    "telegram",
+                "tenant_slug": "seu",
+            },
+            timeout=5,
+        )
+        if r.status_code == 200:
+            session_id = r.json()["session_id"]
+            _SESSION_CACHE[chat_id] = (session_id, time.monotonic() + SESSION_LOCAL_TTL)
+            return session_id
+    except Exception as exc:
+        log.warning("session_create_failed | chat=%d | %s", chat_id, exc)
+    return None
 
 
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
 
-async def _search(http: httpx.AsyncClient, query: str) -> dict | None:
+async def _search(
+    http: httpx.AsyncClient,
+    query: str,
+    user_id: str | None,
+    session_id: str | None,
+) -> dict | None:
     try:
+        payload: dict = {"query": query, "limit": 5}
+        if user_id:
+            payload["user_id"] = user_id
+        if session_id:
+            payload["session_id"] = session_id
         r = await http.post(
             f"{SEARCH_API_URL}/search",
-            json={"query": query, "limit": 5},
+            json=payload,
             timeout=20,
         )
         if r.status_code >= 400:
@@ -117,13 +205,49 @@ def _format_results(data: dict) -> str:
         if len(content) > 300:
             content = content[:297] + "..."
 
-        meta    = row.get("metadata") or {}
-        course  = meta.get("course_code") or row.get("course_code") or ""
-        tag     = f" <i>({course})</i>" if course else ""
+        meta   = row.get("metadata") or {}
+        course = meta.get("course_code") or row.get("course_code") or ""
+        tag    = f" <i>({course})</i>" if course else ""
 
         lines.append(f"<b>{i}.{tag}</b>\n{content}")
 
     return "\n\n".join(lines)
+
+
+def _feedback_keyboard(session_id: str) -> dict:
+    return {
+        "inline_keyboard": [[
+            {"text": "👍 مفيد",      "callback_data": f"fb:1:{session_id}"},
+            {"text": "👎 مش مفيد",  "callback_data": f"fb:0:{session_id}"},
+        ]]
+    }
+
+
+# ---------------------------------------------------------------------------
+# Feedback callback handler
+# ---------------------------------------------------------------------------
+
+async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> None:
+    cq_id = callback_query["id"]
+    data  = callback_query.get("data", "")
+
+    if data.startswith("fb:"):
+        parts = data.split(":", 2)
+        if len(parts) == 3:
+            helpful    = parts[1] == "1"
+            session_id = parts[2]
+            try:
+                await http.post(
+                    f"{SEARCH_API_URL}/v1/sessions/{session_id}/feedback",
+                    json={"helpful": helpful},
+                    timeout=5,
+                )
+                log.info("FEEDBACK | session=%s | helpful=%s", session_id, helpful)
+            except Exception as exc:
+                log.warning("feedback_post_failed | %s", exc)
+
+    # Always answer to stop the Telegram loading spinner
+    await _tg(http, "answerCallbackQuery", callback_query_id=cq_id)
 
 
 # ---------------------------------------------------------------------------
@@ -152,15 +276,24 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     log.info("QUERY | chat=%d | q=%.60s", chat_id, text)
     await _typing(http, chat_id)
 
-    data = await _search(http, text)
+    # Resolve identity (non-blocking on failure)
+    user_id    = await _get_or_create_user(http, chat_id)
+    session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
+
+    data = await _search(http, text, user_id, session_id)
     if data is None:
         await _send(http, chat_id, _ERROR)
         return
 
-    reply = _format_results(data)
-    await _send(http, chat_id, reply)
-    log.info("REPLY | chat=%d | count=%d | grounded=%s",
-             chat_id, data.get("count", 0), data.get("grounded"))
+    reply   = _format_results(data)
+    grounded = data.get("grounded", False)
+
+    # Attach feedback buttons only when results were returned
+    markup = _feedback_keyboard(session_id) if grounded and session_id else None
+    await _send(http, chat_id, reply, reply_markup=markup)
+
+    log.info("REPLY | chat=%d | count=%d | grounded=%s | session=%s",
+             chat_id, data.get("count", 0), grounded, session_id)
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +307,10 @@ async def main() -> None:
     async with httpx.AsyncClient() as http:
         while True:
             try:
-                params: dict = {"timeout": 30, "allowed_updates": ["message"]}
+                params: dict = {
+                    "timeout":         30,
+                    "allowed_updates": ["message", "callback_query"],
+                }
                 if offset is not None:
                     params["offset"] = offset
 
@@ -188,8 +324,11 @@ async def main() -> None:
                 for update in payload.get("result") or []:
                     offset = update["update_id"] + 1
                     msg = update.get("message")
+                    cb  = update.get("callback_query")
                     if msg:
-                        await _handle(http, msg)
+                        asyncio.create_task(_handle(http, msg))
+                    elif cb:
+                        asyncio.create_task(_handle_callback(http, cb))
 
             except asyncio.CancelledError:
                 log.info("BOT_STOP")

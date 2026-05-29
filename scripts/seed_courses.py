@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-seed_courses.py — Populates seu_courses with names, credit hours, levels, and prerequisites.
+seed_courses.py — Populates inst_courses with names, credit hours, levels, and prerequisites.
 
 Usage:
     python3 scripts/seed_courses.py                  # seed all programs
@@ -8,7 +8,7 @@ Usage:
     python3 scripts/seed_courses.py --embed          # also embed descriptions into document_chunks
     python3 scripts/seed_courses.py --program BSCS   # one program only
 
-Targets: seu_courses (migration 008), document_chunks (--embed only).
+Targets: inst_courses (migration 008), document_chunks (--embed only).
 Conflict strategy: merge-duplicates on (tenant_id, code) — preserves specialization_id.
 
 Requires:
@@ -44,7 +44,7 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
-DATA_FILE = Path(__file__).parent / "data" / "seu_courses.json"
+DATA_FILE = Path(__file__).parent / "data" / "inst_courses.json"
 
 
 def log(event: str, **kwargs):
@@ -54,7 +54,7 @@ def log(event: str, **kwargs):
 
 async def upsert_course(http: httpx.AsyncClient, row: dict) -> str:
     r = await http.post(
-        f"{SUPABASE_URL}/rest/v1/seu_courses",
+        f"{SUPABASE_URL}/rest/v1/inst_courses",
         headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
         params={"on_conflict": "tenant_id,code"},
         json=row,
@@ -159,7 +159,7 @@ async def seed_program(
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Seed SEU courses into seu_courses table")
+    parser = argparse.ArgumentParser(description="Seed SEU courses into inst_courses table")
     parser.add_argument("--dry-run", action="store_true", help="Validate data without DB writes")
     parser.add_argument("--embed", action="store_true", help="Embed descriptions into document_chunks")
     parser.add_argument("--program", type=str, default=None, help="Seed one program only (e.g. BSCS)")

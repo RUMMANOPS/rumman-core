@@ -38,13 +38,16 @@ log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 INTENT_TYPES = frozenset({
-    "exam_topics",    # what is covered in an exam
-    "exam_schedule",  # when is an exam
-    "resource",       # summaries, notes, slides, past papers
-    "deadline",       # when is something due
-    "course_info",    # course description, plan, requirements
-    "clarify",        # too ambiguous to classify — ask student
-    "unknown",        # cannot determine intent
+    "exam_topics",        # what topics/content appear in an exam
+    "exam_schedule",      # when is an exam
+    "resource",           # summaries, notes, slides, past papers
+    "deadline",           # when is something due
+    "course_info",        # course description, study plan, credit hours, requirements
+    "concept_explain",    # define or explain an academic concept (NPV, Murabaha, etc.)
+    "prerequisite_check", # what courses/requirements before taking course X
+    "comparison",         # what is the difference between X and Y
+    "clarify",            # too ambiguous to classify — ask student
+    "unknown",            # cannot determine intent
 })
 
 
@@ -182,7 +185,7 @@ Return ONLY valid JSON matching this schema (no extra keys, no explanation):
 {
   "normalized_text": "Full MSA Arabic rewrite of the query. Remove dialect. Keep all meaningful content.",
   "english_query": "REQUIRED — always provide even for unknown/clarify intent. Concise English translation of the query. Used to search English-language corpus content.",
-  "intent_type": "<one of: exam_topics | exam_schedule | resource | deadline | course_info | clarify | unknown>",
+  "intent_type": "<one of: exam_topics | exam_schedule | resource | deadline | course_info | concept_explain | prerequisite_check | comparison | clarify | unknown>",
   "course_codes": ["array of course codes found in query, uppercase, e.g. CS241"],
   "exam_type": "<midterm | final | quiz | null>",
   "source_type_filter": "<exam | study_plan | upload | null>",
@@ -192,13 +195,19 @@ Return ONLY valid JSON matching this schema (no extra keys, no explanation):
 }
 
 Intent type guide:
-  exam_topics    — student wants to know what topics/content appear in an exam
-  exam_schedule  — student wants to know when an exam occurs
-  resource       — student wants study materials: summaries, notes, slides, past papers
-  deadline       — student wants to know when an assignment or project is due
-  course_info    — student wants course description, study plan, or requirements
-  clarify        — query is too ambiguous to classify with confidence ≥ 0.50
-  unknown        — cannot determine intent even with clarification\
+  exam_topics       — student wants to know what topics/content appear in an exam
+  exam_schedule     — student wants to know when an exam occurs
+  resource          — student wants study materials: summaries, notes, slides, past papers
+  deadline          — student wants to know when an assignment or project is due
+  course_info       — student wants course description, study plan, credit hours, or requirements
+  concept_explain   — student wants a definition or explanation of an academic concept
+                      (e.g. "ما هو NPV", "اشرح عقد المرابحة", "what is risk management")
+  prerequisite_check— student wants to know prerequisites or requirements to take a course
+                      (e.g. "وش أحتاج قبل CS241", "متطلبات IT488")
+  comparison        — student wants to compare two concepts, courses, or approaches
+                      (e.g. "الفرق بين MGT وCS", "compare FIFO and LIFO")
+  clarify           — query is too ambiguous to classify with confidence ≥ 0.50
+  unknown           — cannot determine intent even with clarification\
 """
 
 

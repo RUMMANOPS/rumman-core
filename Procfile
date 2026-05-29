@@ -1,5 +1,4 @@
 listener: python3 app/rumman_engine.py
-audio: sleep 86400
 backfill: python3 app/telegram_backfill_worker.py
 media: python3 app/telegram_download_worker.py
 embed: python3 app/embed_worker.py

@@ -80,13 +80,17 @@ SESSION_TTL_SECONDS = 30 * 60
 _SYNTHESIS_SYSTEM = """\
 You are رمّان (Rummaan) — an intelligent academic companion for Saudi Electronic University students.
 
-You have retrieved source chunks from real materials: student exam archives, course summaries, official SEU documents, course descriptions, and academic discussions. Use these sources to give a genuinely helpful, substantive response.
+Each source chunk is tagged with an authority tier:
+  [OFFICIAL]   — extracted from official university documents (study plans, regulations, course descriptions)
+  [COMMUNITY]  — student-shared materials (exam archives, notes, group discussions)
 
 Grounding rules:
 - Use ONLY information present in the provided source chunks. Do not invent or extrapolate.
 - Chunks may be in Arabic or English — understand both; respond in the student's language.
-- When chunks contain exam questions: read them carefully, identify the topics and concepts they test, and present those clearly. This is a complete and valid answer — do not hedge it.
-- When chunks contain definitions, explanations, or course content: synthesize and explain in your own words. Be the intelligent companion, not a copy-paste machine.
+- When OFFICIAL and COMMUNITY sources agree: answer directly.
+- When they differ or conflict: present the official position first, then note the community perspective.
+- When chunks contain exam questions: identify the topics and concepts they test, present them clearly. Complete and valid — do not hedge.
+- When chunks contain definitions, explanations, or course content: synthesize in your own words. Be the intelligent companion, not a copy-paste machine.
 - When chunks partially answer the question: share what you found and be honest about the gap.
 - When chunks are off-topic: say "ما لقيت إجابة واضحة في المواد المتاحة — جرّب تذكر رمز المادة أو اسأل بطريقة مختلفة."
 
@@ -215,7 +219,7 @@ async def _retrieve_curriculum_facts(
     http: httpx.AsyncClient,
     course_codes: list[str],
 ) -> list[dict]:
-    """Query seu_courses directly for authoritative course metadata.
+    """Query inst_courses directly for authoritative course metadata.
     Returns results in the same shape as match_documents rows so they flow
     through the same dedup/synthesis pipeline without special-casing."""
     if not course_codes:
@@ -223,7 +227,7 @@ async def _retrieve_curriculum_facts(
 
     filter_val = f"in.({','.join(course_codes)})"
     r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/seu_courses",
+        f"{SUPABASE_URL}/rest/v1/inst_courses",
         headers=HEADERS,
         params={
             "code": filter_val,
@@ -269,7 +273,7 @@ async def _retrieve_curriculum_facts(
             "source_type":      "course_description",
             "source_authority": "official",
             "similarity":       0.95,  # exact code match — treat as top result
-            "metadata":         {"origin": "seu_courses"},
+            "metadata":         {"origin": "inst_courses"},
         })
 
     return facts
@@ -349,8 +353,14 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
     Returns (answer_text, total_tokens_used).
     Raises asyncio.TimeoutError on timeout — caller handles fallback.
     """
+    def _tier_label(row: dict) -> str:
+        tier = row.get("authority_tier") or (row.get("metadata") or {}).get("origin", "")
+        if tier == "official" or "inst_courses" in tier or "seu_courses" in tier:
+            return "[OFFICIAL]"
+        return "[COMMUNITY]"
+
     chunk_text = "\n\n---\n\n".join(
-        f"[{i+1}] {(row.get('content') or '').strip()[:500]}"
+        f"{_tier_label(row)} [{i+1}] {(row.get('content') or '').strip()[:500]}"
         for i, row in enumerate(chunks[:5])
     )
     resp = await asyncio.wait_for(

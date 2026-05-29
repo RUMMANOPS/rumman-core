@@ -24,7 +24,7 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
-# college_id lookup: populated at startup from seu_colleges.telegram_chat_ids
+# college_id lookup: populated at startup from inst_colleges.telegram_chat_ids
 _COLLEGE_BY_CHAT: dict[str, str] = {}
 
 # backfill registry: platform_chat_ids that already have a telegram_backfill_jobs row
@@ -34,7 +34,7 @@ _BACKFILL_REGISTERED: set[str] = set()
 
 async def load_college_chat_map(http: httpx.AsyncClient) -> None:
     r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/seu_colleges",
+        f"{SUPABASE_URL}/rest/v1/inst_colleges",
         headers=HEADERS,
         params={"select": "id,telegram_chat_ids"},
     )

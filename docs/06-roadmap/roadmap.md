@@ -2,128 +2,105 @@
 
 ## Phase 0: Foundation
 
-Status: In Progress
+Status: **Complete**
 
-### Goals
-
-- Establish stable Telegram live ingestion.
-- Store messages in Supabase.
-- Separate live ingestion from historical backfill.
-- Create project documentation as source of truth.
-
-### Completed
-
-- Railway deployment
-- Telegram user client session
-- Supabase message storage
-- Live listener
-- telegram_sync_state checkpoints
-- telegram_backfill_jobs queue
-- Backfill worker process
-- GitHub docs structure
+- Railway deployment, Telegram user client session, Supabase message storage
+- Live listener (`rumman_engine.py`) with `ENABLE_BACKFILL=False` guard
+- `telegram_sync_state` checkpoints, `telegram_backfill_jobs` queue
+- Backfill worker with lease lifecycle
+- GitHub docs structure and ADR framework
 
 ---
 
-## Phase 1: Memory/Data Spine
+## Phase 1: Data Spine + Search Layer
 
-Status: Current Phase
+Status: **Complete** *(evolved significantly beyond original scope)*
 
-### Goals
+The original Phase 1 goal was ingestion stabilization. The system evolved further:
 
-- Stabilize ingestion.
-- Build resumable backfill.
-- Improve observability.
-- Validate message deduplication.
-- Document database schema.
-- Keep intelligence disabled until data spine is stable.
+**Ingestion (original goals — complete):**
+- Stable live ingestion with deduplication
+- Resumable backfill with lease + heartbeat
+- Audio transcription pipeline (`audio_worker.py` → `telegram_download_worker.py`)
+- Media download and OCR pipeline (`telegram_download_worker.py`)
+- Embedding pipeline (`embed_worker.py` → `document_chunks`)
 
-### Deliverables
+**Search and retrieval (added during Phase 1):**
+- Query understanding pipeline: normalization → intent hints → GPT-4o-mini classification → search routing (`query_understanding.py`)
+- Vector search via pgvector with dual Arabic/English queries (`search_api.py`)
+- Answer synthesis with grounding (`/synthesize` endpoint)
+- Student-facing Telegram bot with session management and feedback (`telegram_bot.py`)
 
-- Controlled backfill worker
-- Backfill job lifecycle
-- Sync state accuracy
-- Operational metrics definitions
-- Database documentation
+**Institutional knowledge layer (added during Phase 1):**
+- SEU curriculum structure: colleges → specializations → courses (`seu_*` tables, migrations 008–009)
+- University knowledge repository: 93 official SEU documents organized across 6 domains
+- `scripts/ingest_document.py` — CLI to push official documents through the pipeline
+- `scripts/seed_courses.py` — seeds structured course data (names, descriptions, prerequisites)
 
----
-
-## Phase 2: Intelligence Pipeline v1
-
-Status: Planned
-
-### Goals
-
-- Extract tasks, decisions, deadlines, entities, and insights from messages.
-- Use structured outputs.
-- Log AI runs.
-- Keep every extracted object traceable to source messages.
-
-### Deliverables
-
-- Extraction schema
-- AI runs table
-- Message classification jobs
-- Memory writer
-- Task writer
-- Decision writer
-- Deadline writer
+**Current state:** 5 colleges, 21 specializations, 157 courses fully mapped. Official document ingestion pipeline exists but has not yet been run on the repository (93 files pending).
 
 ---
 
-## Phase 3: Orchestration Layer
+## Phase 2: Institutional Intelligence
 
-Status: Planned
+Status: **Next**
+
+The transition from search-over-community-content to grounded institutional + community intelligence.
 
 ### Goals
 
-- Use n8n as an orchestration layer.
-- Trigger workflows from jobs and events.
-- Send notifications and summaries.
-- Integrate external tools.
+- Connect the institutional layer to retrieval: structured queries for course facts (credits, prerequisites, program requirements) bypass vector search and query `seu_*` tables directly
+- Populate `seu_courses.name_ar/name_en` from `scripts/data/seu_courses.json` (82 courses ready)
+- Ingest official university documents (93 files) through the pipeline with correct source metadata
+- Add `source_authority` to `document_chunks` to distinguish official institutional content from community uploads
+- Wire Telegram `chat_id` → college tagging at ingestion time (mapping already in `seu_colleges.telegram_chat_ids`)
+- Enable `intelligence_worker.py` for entity/task/deadline extraction (requires ADR update)
 
 ### Deliverables
 
-- n8n workflow registry
-- Notification flows
-- Summary flows
-- Manual trigger flows
-- Error escalation flows
+- Structured query path in search API for curriculum facts
+- Official document corpus in `document_chunks` with authority metadata
+- College-tagged community chunks (free precision improvement)
+- Intelligence extraction running on a subset of Telegram streams
+- Course coverage analytics (which courses are well-covered vs. gaps)
 
 ---
 
-## Phase 4: Product Interface
+## Phase 3: Multi-University Expansion
 
-Status: Future
+Status: **Planned**
 
 ### Goals
 
-- Build user-facing dashboard.
-- Expose operational memory.
-- Search messages, decisions, tasks, and insights.
-- Provide system health visibility.
+- Second university onboarded using the same institutional + community framework
+- Rename `seu_*` tables to `inst_*` (tenant_id handles university scoping)
+- University knowledge repository formalized: repeatable onboarding process documented
+- Per-university bot deployment or routing layer
 
 ### Deliverables
 
-- Dashboard
-- Search UI
-- Task/decision views
-- Operational health view
+- `inst_colleges`, `inst_specializations`, `inst_courses` schema migration
+- Second university knowledge repository (same folder contract as SEU)
+- Onboarding runbook for new institutions
+- Bot routing layer or per-tenant deployment
 
 ---
 
-## Phase 5: Multi-Channel Expansion
+## Phase 4: Intelligence Layer
 
-Status: Future
+Status: **Planned**
 
-### Goals
+- Proactive intelligence: deadline detection, exam date extraction, assignment announcements
+- Student context: personalization based on declared program and level
+- Daily/weekly brief generation from Telegram streams
+- Operational dashboard for knowledge coverage and system health
 
-- Add WhatsApp, email, files, voice, and university sources.
-- Normalize all channels into the same data spine.
+---
 
-### Deliverables
+## Phase 5: Platform Layer
 
-- WhatsApp ingestion
-- Email ingestion
-- File ingestion
-- Voice pipeline
-- Unified source references
+Status: **Future**
+
+- Multi-channel ingestion (WhatsApp, email, files)
+- B2B analytics layer (institutional view of course activity, student confusion patterns)
+- External API for third-party integrations

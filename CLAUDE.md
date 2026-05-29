@@ -21,10 +21,17 @@ This rule exists to keep inference costs predictable. Opus is ~5× the cost of S
 
 ## What RUMMAN Is
 
-RUMMAN is an **Operational Intelligence OS**, not a chatbot. Current phase per `docs/06-roadmap/roadmap.md` is **Phase 1: Memory/Data Spine** — stabilize ingestion before turning on intelligence. The system ingests Telegram traffic into Supabase, where it will eventually become the operational memory for a multi-tenant SaaS platform (ADR-0004).
+RUMMAN is an **Operational Intelligence OS**, not a chatbot. The system has two distinct knowledge layers:
+
+- **Institutional layer** — what the university IS: colleges, departments, programs, courses, regulations, calendar. Lives in the `seu_*` Supabase tables and the university knowledge repository.
+- **Community layer** — what is HAPPENING inside the university: Telegram messages, student uploads, summaries, past exams, instructor announcements. Lives in `document_chunks` via vector embeddings.
+
+Both layers are required. The institutional layer provides ground truth. The community layer provides living intelligence. Together they enable grounded answers.
+
+Current phase per `docs/06-roadmap/roadmap.md`: **Phase 1 → transitioning to Phase 2**. The data spine is stable and the search/bot layer is live. The next major boundary is wiring the institutional layer into retrieval and enabling the intelligence pipeline.
 
 `docs/` is the **source of truth** per ADR-0003. Before making architectural changes, read:
-1. `docs/philosophy/vocabulary.md` — precise definitions of load-bearing terms (claim, evidence, machine-asserted, provenance)
+1. `docs/philosophy/vocabulary.md` — precise definitions of load-bearing terms
 2. `docs/philosophy/core-principles.md` — the beliefs that shape all design decisions
 3. `docs/constraints/hard-boundaries.md` — rules that must not be broken
 4. The relevant ADR in `docs/02-adrs/`
@@ -33,65 +40,143 @@ RUMMAN is an **Operational Intelligence OS**, not a chatbot. Current phase per `
 
 ## Runtime Topology
 
-Deployed on Railway. `Procfile` defines three **independent** processes — they share Supabase but never call each other:
+Deployed on Railway. `Procfile` defines **seven independent processes** — they share Supabase but never call each other:
 
-| Process | File | Role |
+| Process | File | Role | Status |
+|---|---|---|---|
+| `listener` | `app/rumman_engine.py` | Live Telethon `NewMessage` handler → `messages` + `telegram_sync_state`. Never crawls history. | Always on |
+| `audio` | `app/audio_worker.py` | Polls `processing_jobs` for `job_type=audio_transcribe` → OpenAI transcription → `media_files`. | Sleeping (86400s) |
+| `backfill` | `app/telegram_backfill_worker.py` | Claims one `telegram_backfill_jobs` row, processes with lease + heartbeat. Run on demand. | Sleeping (86400s) |
+| `media` | `app/telegram_download_worker.py` | Unified handler: `audio_transcribe` + `telegram_media` jobs in one process (avoids session conflicts). | Always on |
+| `embed` | `app/embed_worker.py` | Polls `processing_jobs` for `job_type=embed_chunk` → chunk text → OpenAI embeddings → `document_chunks`. | Always on |
+| `search` | `app/search_api.py` | FastAPI search service: query understanding → pgvector → synthesis. Port `$PORT`. | Always on |
+| `bot` | `app/telegram_bot.py` | Student-facing Telegram bot: long-polls Telegram API, calls `/synthesize`, returns grounded answers. | Always on |
+
+**Workers that exist but are NOT in the Procfile (deliberately off):**
+
+| File | Role | Why off |
 |---|---|---|
-| `listener` | `app/rumman_engine.py` | Live Telethon `NewMessage` handler → inserts into `messages`, updates `telegram_sync_state`. Never crawls history. |
-| `audio` | `app/audio_worker.py` | Polls `processing_jobs` where `job_type=audio_transcribe`, downloads media via Telethon, transcribes through OpenAI (`gpt-4o-mini-transcribe`, `language=ar`), writes back to `media_files`. |
-| `backfill` | `app/telegram_backfill_worker.py` | Claims one `telegram_backfill_jobs` row, processes a batch with lease + heartbeat, releases stale leases on startup. Designed to be run on demand, not continuously. |
+| `app/intelligence_worker.py` | Extract entities, tasks, decisions from messages | Phase 1 → Phase 2 boundary; requires ADR update |
+| `app/daily_brief.py` | Generate structured daily briefs from Telegram streams | Requires intelligence layer; off until Phase 2 |
+| `app/pdf_worker.py` | Extract text from PDFs in Supabase Storage → `source_documents` | Run on demand when ingesting official documents |
+| `app/query_handler.py` | CLI + importable module: synthesize course intelligence from all layers | Development/debug tool; not a service |
 
-`app/intelligence_worker.py` exists but is **deliberately not in the Procfile** — intelligence is kept off until the data spine is stable (roadmap Phase 1 → Phase 2 boundary). Do not add it to the Procfile without an ADR update.
-
-`auth_session.py` is a one-shot local helper to generate `TELEGRAM_SESSION_STRING` — it is `.gitignore`'d and must never run on Railway.
+`auth_session.py` is a one-shot local helper to generate `TELEGRAM_SESSION_STRING` — gitignored, never runs on Railway.
 
 ## The Cardinal Architectural Rule
 
 **Live ingestion and historical backfill are permanently separated** (ADR-0002). Earlier versions merged them and produced startup delays, rate-limit hits, and uncontrolled crawls. Concretely:
 
 - `rumman_engine.py` must not call `iter_messages` or any historical crawl. `ENABLE_BACKFILL` exists as a guard and must stay `False`.
-- Backfill writes go through `telegram_backfill_jobs` lifecycle: pending → running (lease) → progress → pending again until oldest reached → completed. Stale `running` jobs whose `lease_expires_at` is past are auto-released by the next worker.
-- Both writers go to the same `messages` table; duplicates are caught via HTTP 409 from PostgREST (unique constraint on platform message id) — preserve this dedup behavior on schema changes.
+- Backfill writes go through `telegram_backfill_jobs` lifecycle: pending → running (lease) → progress → pending again until oldest reached → completed.
+- Both writers go to `messages`; duplicates caught via HTTP 409 (unique constraint on platform message id) — preserve this dedup on schema changes.
 
 ## Data Spine
 
-All DB access is **direct PostgREST over httpx** (`{SUPABASE_URL}/rest/v1/<table>`) using the service-role key in `apikey` + `Authorization` headers. There is no Supabase client library and no ORM. Patterns to follow:
+All DB access is **direct PostgREST over httpx** (`{SUPABASE_URL}/rest/v1/<table>`) using the service-role key. No Supabase client library, no ORM.
 
+Patterns:
 - Insert with `Prefer: return=representation`. Treat 409 as `"duplicate"`, ≥400 as `"error"`.
-- Upsert via `Prefer: resolution=merge-duplicates` + `?on_conflict=<col>` (see `update_sync_state` in `rumman_engine.py`).
-- Conditional patch by including the expected `status` / `worker_id` as filters in the URL so the patch fails silently if another worker raced — this is how the backfill lease is held.
+- Upsert via `Prefer: resolution=merge-duplicates` + `?on_conflict=<col>`.
+- Conditional patch by including expected `status` / `worker_id` as URL filters — silent fail on race prevents double-processing.
 
-Tables (see `docs/04-architecture/` and `docs/04-database/`):
+Key tables:
+- `messages` — canonical messages. Keyed on (`platform_chat_id`, `platform_message_id`).
+- `telegram_sync_state` — one row per chat; newest/oldest ids + total seen.
+- `telegram_backfill_jobs` — controlled historical work with lease lifecycle.
+- `processing_jobs` — generic async work queue (`audio_transcribe`, `telegram_media`, `embed_chunk`, `pdf_extract`).
+- `source_documents` — uploaded/ingested files awaiting or post-extraction.
+- `document_chunks` — vector-embedded chunks; the retrieval corpus.
+- `media_files` — audio transcription results.
+- `seu_colleges`, `seu_specializations`, `seu_courses` — SEU institutional layer (master data).
+- `tenants`, `users`, `sessions` — platform identity layer.
 
-- `messages` — canonical normalized messages from any platform. Keyed on (`platform_chat_id`, `platform_message_id`).
-- `telegram_sync_state` — one row per chat with newest/oldest message ids and `total_messages_seen`. Lightweight and updated on every live insert.
-- `telegram_backfill_jobs` — controlled historical work with `status`, `worker_id`, `heartbeat_at`, `lease_expires_at`, `retry_count`.
-- `processing_jobs` — generic async work queue (audio transcription today; classification/extraction later).
-- `media_files`, `intelligence_items`, plus planned `entities`, `memories`, `tasks`, `deadlines`, `decisions`, `insights`.
+ADR-0004: every operational object must **eventually** carry `tenant_id`. New tables should include it from the start.
 
-ADR-0004 + `docs/01-architecture/tenant-isolation-strategy.md`: every operational object must **eventually** carry tenant ownership. New tables should be designed with `tenant_id` in mind even if it isn't populated yet.
+## University Knowledge Repository
+
+The institutional knowledge repository lives outside this repo at:
+```
+.../0-RUMMAN/0-Universities/1- Saudi Electronic University/
+```
+
+Structure:
+```
+0. OpenData/          — enrollment stats, faculty data (PDF)
+1. StudyPlans/        — official program study plans (PDF/DOCX), organized by college → dept → program
+2. Regulations/       — exam rules, procedures, student guides (PDF)
+3. AcademicCalendar/  — semester dates and windows (TXT/PDF)
+4. CourseContent/     — individual course syllabi (PDF) — currently ENGT program (34 files)
+5. Diplomas/          — Applied College diploma programs
+_metadata/            — knowledge_manifest.json, program_index.json
+```
+
+**To ingest official documents into the platform**, use `scripts/ingest_document.py`:
+```bash
+python3 scripts/ingest_document.py <file_path> \
+    --source-type study_plan \
+    --course-code IT362 \
+    [--dry-run]
+```
+
+Source types: `exam`, `study_plan`, `regulation`, `course_description`, `telegram_export`, `upload`
+
+**To seed structured course data** (names, descriptions, prerequisites) from `scripts/data/seu_courses.json`:
+```bash
+python3 scripts/seed_courses.py              # seed all programs
+python3 scripts/seed_courses.py --dry-run    # validate only
+python3 scripts/seed_courses.py --embed      # also embed course descriptions
+```
+
+## Scripts
+
+Operational CLI tools in `scripts/`. All require `.env` with `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
+
+| Script | Purpose |
+|---|---|
+| `ingest_document.py` | Ingest a local file into the knowledge pipeline (upload → pdf_extract job → embed_chunk job) |
+| `seed_courses.py` | Seed structured course data from `scripts/data/seu_courses.json` into `seu_courses` |
+| `create_backfill_jobs.py` | Create `telegram_backfill_jobs` rows for specified chat IDs |
+| `generate_seed_lexicon.py` | Generate normalization dictionary candidates from corpus — outputs to `data/seed_candidates_*.json` (gitignored) |
+| `review_candidates.py` | Interactive review of lexicon candidates before adding to `data/normalization_dict.json` |
+| `extract_concepts.py` | Extract academic concepts from document chunks for knowledge graph seeding |
 
 ## Commands
 
 ```bash
-pip install -r requirements.txt              # deps (telethon, httpx, python-dotenv, openai)
+pip install -r requirements.txt              # deps
 
-python3 app/rumman_engine.py                  # run listener locally
-python3 app/audio_worker.py                   # run audio worker locally
-python3 app/telegram_backfill_worker.py       # run one backfill batch (worker exits after processing one job)
+# Run workers locally
+python3 app/rumman_engine.py                 # live listener
+python3 app/telegram_download_worker.py      # media + audio handler
+python3 app/embed_worker.py                  # embed chunks
+python3 app/telegram_backfill_worker.py      # one backfill batch (exits after)
 
-python3 auth_session.py                       # generate TELEGRAM_SESSION_STRING (LOCAL ONLY)
+# Ingest official university documents
+python3 scripts/ingest_document.py <file> --source-type study_plan [--dry-run]
+
+# Seed course structured data
+python3 scripts/seed_courses.py [--dry-run] [--embed] [--program BSCS]
+
+# Development tools
+python3 app/query_handler.py MGT311 "exam topics"  # test query synthesis locally
+uvicorn app.search_api:app --reload                 # run search API locally
+
+python3 auth_session.py                            # generate session string (LOCAL ONLY)
 ```
-
-No test suite, lint, or build step exists in this repo. Deployment is `git push` — Railway picks up the `Procfile` and restarts on failure (`railway.json`: max 10 retries).
 
 ## Required Environment
 
-`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`. Backfill worker also reads optional `WORKER_ID`, `BACKFILL_SLEEP_SECONDS`, `BACKFILL_LEASE_MINUTES`.
+`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
+
+Optional: `WORKER_ID`, `BACKFILL_SLEEP_SECONDS`, `BACKFILL_LEASE_MINUTES`, `RUMMAN_USER_SALT`, `SEARCH_API_URL`.
 
 ## Repo Conventions
 
-- `archive_old/` is `.gitignore`'d — it holds superseded code; do not add new code there and do not import from it.
-- `.env`, `*.session`, `auth_session.py`, `downloads/`, `logs/` are git-ignored. Empty marker files like `force_redeploy.txt`, `rebuild.txt`, `trigger.txt` exist only to nudge Railway redeploys.
+- `archive_old/` is gitignored — superseded code only; never import from it.
+- `data/seed_candidates_*.json` is gitignored — ephemeral lexicon generation outputs.
+- `.env`, `*.session`, `auth_session.py`, `downloads/`, `logs/` are gitignored.
+- Empty files `force_redeploy.txt`, `rebuild.txt`, `trigger.txt` exist only to nudge Railway redeploys — they carry no information.
 - Telethon `StringSession` is the only auth path; never write `.session` files in deployed code.
-- Workers print structured single-line log events (`JOB_CLAIMED | id=... | chat=...`) with `flush=True` — keep this format so Railway logs stay greppable.
+- Workers print structured single-line log events (`JOB_CLAIMED | id=... | chat=...`) with `flush=True` for Railway log greppability.
+- All DB access via direct PostgREST — no ORM, no Supabase client library.

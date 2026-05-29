@@ -2,6 +2,7 @@ telethon==1.43.0
 httpx==0.28.1
 python-dotenv==1.0.1
 openai==1.93.0
-pymupdf>=1.25.0
-fastapi>=0.111.0
-uvicorn>=0.29.0
+pydantic>=2.0.0
+pymupdf==1.25.5
+fastapi==0.115.0
+uvicorn==0.30.6

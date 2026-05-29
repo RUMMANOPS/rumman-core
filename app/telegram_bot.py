@@ -36,9 +36,22 @@ RUMMAN_USER_SALT  = os.environ.get("RUMMAN_USER_SALT", "")
 TG_BASE           = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 SESSION_LOCAL_TTL = 25 * 60  # local cache TTL; server TTL is 30 min
+_CACHE_MAX_ENTRIES = 50_000   # evict oldest 20% when exceeded
 
-_USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id
+_USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id (no TTL — user IDs are stable)
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
+
+
+def _evict_expired_sessions() -> None:
+    now = time.monotonic()
+    expired = [k for k, (_, exp) in _SESSION_CACHE.items() if exp < now]
+    for k in expired:
+        del _SESSION_CACHE[k]
+    if len(_USER_CACHE) > _CACHE_MAX_ENTRIES:
+        # Evict oldest 20% of user cache entries (dict insertion order preserved in Python 3.7+)
+        evict_count = len(_USER_CACHE) // 5
+        for k in list(_USER_CACHE.keys())[:evict_count]:
+            del _USER_CACHE[k]
 
 _NO_RESULTS = (
     "ما لقيت شي في قاعدة البيانات عن هذا السؤال.\n\n"
@@ -336,7 +349,10 @@ async def main() -> None:
                 )
                 payload = r.json()
 
-                for update in payload.get("result") or []:
+                updates = payload.get("result") or []
+                if updates:
+                    _evict_expired_sessions()
+                for update in updates:
                     offset = update["update_id"] + 1
                     msg = update.get("message")
                     cb  = update.get("callback_query")

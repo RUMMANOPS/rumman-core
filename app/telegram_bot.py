@@ -16,6 +16,7 @@ Environment:
 """
 
 import os
+import re
 import asyncio
 import hashlib
 import logging
@@ -40,6 +41,9 @@ _CACHE_MAX_ENTRIES = 50_000   # evict oldest 20% when exceeded
 
 _USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id (no TTL — user IDs are stable)
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
+_ENROLLED:      dict[int, list[str]]         = {}  # chat_id → enrolled course codes
+
+_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
 
 
 def _evict_expired_sessions() -> None:
@@ -284,6 +288,42 @@ async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> Non
 
 
 # ---------------------------------------------------------------------------
+# /mycourses command
+# ---------------------------------------------------------------------------
+
+async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
+    """Save or display enrolled course codes."""
+    # Parse course codes from the command arguments
+    parts = text.split(None, 1)
+    args  = parts[1].strip() if len(parts) > 1 else ""
+    codes = [m.upper() for m in _COURSE_CODE_RE.findall(args)]
+
+    if codes:
+        _ENROLLED[chat_id] = codes
+        codes_str = "،  ".join(codes)
+        await _send(http, chat_id,
+            f"✅ تم حفظ موادك:\n<b>{codes_str}</b>\n\n"
+            "سأفيلتر إجاباتي حسب موادك من الآن.\n"
+            "لتغيير الموادك، أرسل الأمر مرة ثانية مع الأكواد الجديدة."
+        )
+        log.info("MYCOURSES_SET | chat=%d | courses=%s", chat_id, codes)
+    else:
+        enrolled = _ENROLLED.get(chat_id, [])
+        if enrolled:
+            courses_str = "،  ".join(enrolled)
+            await _send(http, chat_id,
+                f"موادك المسجلة:\n<b>{courses_str}</b>\n\n"
+                "لتغييرها: /mycourses IT362 CS251 MGT311"
+            )
+        else:
+            await _send(http, chat_id,
+                "ما عندك مواد مسجلة حالياً.\n\n"
+                "أرسل: <code>/mycourses IT362 CS251</code> لتسجيل موادك\n"
+                "وسأخصص إجاباتي لموادك فقط."
+            )
+
+
+# ---------------------------------------------------------------------------
 # Message handler
 # ---------------------------------------------------------------------------
 
@@ -299,6 +339,10 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         log.info("START | chat=%d", chat_id)
         return
 
+    if text.lower().startswith("/mycourses"):
+        await _handle_mycourses(http, chat_id, text)
+        return
+
     if text.startswith("/"):
         return
 
@@ -306,14 +350,20 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         await _send(http, chat_id, _IDENTITY)
         return
 
-    log.info("QUERY | chat=%d | q=%.60s", chat_id, text)
+    # If query has no course code but student has enrolled courses, inject them as context
+    query = text
+    if not _COURSE_CODE_RE.search(text) and chat_id in _ENROLLED and _ENROLLED[chat_id]:
+        enrolled_str = " ".join(_ENROLLED[chat_id])
+        query = f"{text} (موادي: {enrolled_str})"
+
+    log.info("QUERY | chat=%d | q=%.60s", chat_id, query)
     await _typing(http, chat_id)
 
     # Resolve identity (non-blocking on failure)
     user_id    = await _get_or_create_user(http, chat_id)
     session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
 
-    data = await _synthesize(http, text, user_id, session_id)
+    data = await _synthesize(http, query, user_id, session_id)
     if data is None:
         await _send(http, chat_id, _ERROR)
         return

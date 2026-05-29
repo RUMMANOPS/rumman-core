@@ -280,6 +280,69 @@ async def _retrieve_curriculum_facts(
 
 
 # ---------------------------------------------------------------------------
+# Academic calendar retrieval (temporal intents — bypasses vector search)
+# ---------------------------------------------------------------------------
+
+async def _retrieve_calendar_events(http: httpx.AsyncClient) -> list[dict]:
+    """Query academic_calendar directly for exam_schedule / deadline intents.
+    Returns a single rich chunk with all events + days-until calculations."""
+    from datetime import date
+    today = date.today()
+
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/academic_calendar",
+        headers=HEADERS,
+        params={
+            "tenant_id": f"eq.{SEU_TENANT_ID}",
+            "select":    "event_type,event_name_ar,event_name_en,start_date,end_date,semester_key,academic_year,semester",
+            "order":     "start_date.asc",
+        },
+    )
+    if r.status_code >= 400:
+        return []
+    events = r.json()
+    if not events:
+        return []
+
+    lines = [f"التاريخ اليوم: {today.isoformat()}\n\nالتقويم الأكاديمي — الجامعة السعودية الإلكترونية 1447هـ / 2025-2026:\n"]
+    for ev in events:
+        start   = ev.get("start_date")
+        end     = ev.get("end_date")
+        name_ar = ev.get("event_name_ar") or ev.get("event_type", "")
+        name_en = ev.get("event_name_en") or ev.get("event_type", "")
+        sem_key = ev.get("semester_key") or f"{ev.get('academic_year','')}-{ev.get('semester','')}"
+
+        date_str = start or "—"
+        if end and end != start:
+            date_str = f"{start} → {end}"
+
+        timing = ""
+        if start:
+            try:
+                delta = (date.fromisoformat(start) - today).days
+                if delta > 0:
+                    timing = f"  ← بعد {delta} يوم"
+                elif delta == 0:
+                    timing = "  ← اليوم"
+                else:
+                    timing = f"  ← انتهى منذ {abs(delta)} يوم"
+            except ValueError:
+                pass
+
+        lines.append(f"• {name_ar} / {name_en}:  {date_str}{timing}  [{sem_key}]")
+
+    return [{
+        "content":          "\n".join(lines),
+        "course_code":      None,
+        "source_type":      "regulation",
+        "source_authority": "official",
+        "authority_tier":   "official",
+        "similarity":       0.99,
+        "metadata":         {"origin": "academic_calendar"},
+    }]
+
+
+# ---------------------------------------------------------------------------
 # Shared retrieval pipeline
 # ---------------------------------------------------------------------------
 
@@ -338,6 +401,12 @@ async def _run_retrieval(
         if understanding.intent and understanding.intent.course_codes:
             curriculum = await _retrieve_curriculum_facts(http, understanding.intent.course_codes)
             all_raw.extend(curriculum)
+
+        # Inject calendar events for temporal intents — deterministic, not vector search
+        if (understanding.intent and
+                understanding.intent.intent_type in ("exam_schedule", "deadline")):
+            calendar = await _retrieve_calendar_events(http)
+            all_raw.extend(calendar)
 
     results = _deduplicate(all_raw, limit)
     return results, all_raw, understanding, params_log

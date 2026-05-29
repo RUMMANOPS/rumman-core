@@ -312,6 +312,10 @@ async def ingest_one(http: httpx.AsyncClient, target: IngestTarget, stats: RunSt
         stats.errors.append(f"{file_name}: storage upload failed")
         return
 
+    # Official source types from the SEU knowledge repository are always 'official'
+    _OFFICIAL_TYPES = {"study_plan", "regulation", "course_description"}
+    authority_tier = "official" if target.source_type in _OFFICIAL_TYPES else "community"
+
     doc_row = {
         "content_hash":     content_hash,
         "storage_path":     f"{STORAGE_BUCKET}/{storage_path}",
@@ -324,6 +328,7 @@ async def ingest_one(http: httpx.AsyncClient, target: IngestTarget, stats: RunSt
         "language":         target.language,
         "processing_status": "pending",
         "tenant_id":        SEU_TENANT_ID,
+        "authority_tier":   authority_tier,
     }
 
     doc_id = await insert_source_document(http, doc_row)

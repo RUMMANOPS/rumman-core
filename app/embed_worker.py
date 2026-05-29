@@ -206,7 +206,9 @@ async def embed_and_insert_chunks(
             "language": doc.get("language"),
             "chunk_index": i,
             "total_chunks": len(chunks),
-            "ocr_confidence": doc.get("ocr_confidence"),
+            "ocr_confidence":    doc.get("ocr_confidence"),
+            "authority_tier":    doc.get("authority_tier", "community"),
+            "attribution_status": "original",
         }
 
         r = await http.post(

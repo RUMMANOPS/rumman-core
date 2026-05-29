@@ -333,7 +333,14 @@ def build_search_params(
         SearchParams(query=intent_query, course_code=None, source_type=source_type, limit=limit)
     ]
 
-    # Low confidence: also try original normalized text if different
+    # Also search with English translation — Arabic terminology queries (e.g. عقد المرابحة)
+    # embed at lower similarity in question form than in English; both runs are cheap.
+    if intent.english_query and intent.english_query != intent_query:
+        searches.append(SearchParams(
+            query=intent.english_query, course_code=None, source_type=source_type, limit=limit
+        ))
+
+    # Low confidence: also try original normalized text if different from intent rewrite
     if intent.confidence < 0.65 and intent_query != normalized:
         searches.append(SearchParams(query=normalized, course_code=None, source_type=None, limit=limit))
 

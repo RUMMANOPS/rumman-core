@@ -40,7 +40,7 @@ SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # Default: sibling directory of the repo
 _DEFAULT_REPO = (
-    Path(__file__).parent.parent.parent.parent.parent
+    Path(__file__).parent.parent.parent.parent
     / "0-Universities"
     / "1- Saudi Electronic University"
 )

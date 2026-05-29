@@ -181,7 +181,7 @@ Your ONLY job is to extract structured intent from the student's query.
 Return ONLY valid JSON matching this schema (no extra keys, no explanation):
 {
   "normalized_text": "Full MSA Arabic rewrite of the query. Remove dialect. Keep all meaningful content.",
-  "english_query": "Concise English translation of the query intent. Used to search English-language course content.",
+  "english_query": "REQUIRED — always provide even for unknown/clarify intent. Concise English translation of the query. Used to search English-language corpus content.",
   "intent_type": "<one of: exam_topics | exam_schedule | resource | deadline | course_info | clarify | unknown>",
   "course_codes": ["array of course codes found in query, uppercase, e.g. CS241"],
   "exam_type": "<midterm | final | quiz | null>",
@@ -257,7 +257,9 @@ async def classify_intent(
             if isinstance(c, str) and c.strip()
         ]
 
-        english_query = (raw.get("english_query") or "").strip() or None
+        eq_raw = raw.get("english_query") or ""
+        # Guard against GPT returning the literal string "null"
+        english_query = eq_raw.strip() if eq_raw.strip() not in ("", "null", "None") else None
 
         return IntentResult(
             normalized_text=raw.get("normalized_text", query) or query,

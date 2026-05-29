@@ -158,10 +158,10 @@ async def _get_or_create_session(
 
 
 # ---------------------------------------------------------------------------
-# Search
+# Synthesize
 # ---------------------------------------------------------------------------
 
-async def _search(
+async def _synthesize(
     http: httpx.AsyncClient,
     query: str,
     user_id: str | None,
@@ -174,16 +174,16 @@ async def _search(
         if session_id:
             payload["session_id"] = session_id
         r = await http.post(
-            f"{SEARCH_API_URL}/search",
+            f"{SEARCH_API_URL}/synthesize",
             json=payload,
-            timeout=20,
+            timeout=35,
         )
         if r.status_code >= 400:
-            log.warning("SEARCH_ERROR | status=%d | body=%s", r.status_code, r.text[:120])
+            log.warning("SYNTHESIZE_ERROR | status=%d | body=%s", r.status_code, r.text[:120])
             return None
         return r.json()
     except Exception as exc:
-        log.warning("SEARCH_EXCEPTION | %s", exc)
+        log.warning("SYNTHESIZE_EXCEPTION | %s", exc)
         return None
 
 
@@ -191,26 +191,31 @@ async def _search(
 # Result formatting
 # ---------------------------------------------------------------------------
 
-def _format_results(data: dict) -> str:
-    results = data.get("results") or []
-    if not results:
-        clarification = (data.get("debug") or {}).get("clarification")
-        if clarification:
-            return f"سؤالك غير واضح لي — {clarification}"
+def _format_synthesis(data: dict) -> str:
+    if not data.get("grounded"):
+        return _NO_RESULTS
+
+    # Synthesis succeeded
+    answer = (data.get("answer") or "").strip()
+    if answer and not data.get("synthesis_failed"):
+        sources = data.get("sources") or []
+        courses = sorted({s["course_code"] for s in sources if s.get("course_code")})
+        footer  = f"\n\n<i>📚 {', '.join(courses)}</i>" if courses else ""
+        return answer + footer
+
+    # Synthesis timed out — fall back to chunk display
+    chunks = data.get("fallback_chunks") or []
+    if not chunks:
         return _NO_RESULTS
 
     lines: list[str] = []
-    for i, row in enumerate(results[:3], 1):
+    for i, row in enumerate(chunks[:3], 1):
         content = (row.get("content") or "").strip()
         if len(content) > 300:
             content = content[:297] + "..."
-
-        meta   = row.get("metadata") or {}
-        course = meta.get("course_code") or row.get("course_code") or ""
+        course = row.get("course_code") or ""
         tag    = f" <i>({course})</i>" if course else ""
-
         lines.append(f"<b>{i}.{tag}</b>\n{content}")
-
     return "\n\n".join(lines)
 
 
@@ -280,20 +285,21 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     user_id    = await _get_or_create_user(http, chat_id)
     session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
 
-    data = await _search(http, text, user_id, session_id)
+    data = await _synthesize(http, text, user_id, session_id)
     if data is None:
         await _send(http, chat_id, _ERROR)
         return
 
-    reply   = _format_results(data)
+    reply    = _format_synthesis(data)
     grounded = data.get("grounded", False)
 
     # Attach feedback buttons only when results were returned
     markup = _feedback_keyboard(session_id) if grounded and session_id else None
     await _send(http, chat_id, reply, reply_markup=markup)
 
-    log.info("REPLY | chat=%d | count=%d | grounded=%s | session=%s",
-             chat_id, data.get("count", 0), grounded, session_id)
+    log.info("REPLY | chat=%d | sources=%d | grounded=%s | synth_failed=%s | session=%s",
+             chat_id, data.get("source_count", 0), grounded,
+             data.get("synthesis_failed"), session_id)
 
 
 # ---------------------------------------------------------------------------

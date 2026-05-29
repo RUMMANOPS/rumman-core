@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-search_api.py — RUMMAN Platform API + semantic search.
+search_api.py — RUMMAN Platform API + semantic search + grounded synthesis.
 
 Search pipeline (POST /search):
   1. Static normalization   (normalization_dict.json, free)
@@ -11,13 +11,22 @@ Search pipeline (POST /search):
   6. Deduplication + re-rank
   7. Learning event log     (fire-and-forget, never blocks response)
 
+Synthesis pipeline (POST /synthesize):
+  Same as /search steps 1–6, then:
+  8. Grounded synthesis     (gpt-4o-mini, corpus-only constraint, ~$0.0005)
+  9. Synthesis event log    (records token usage for cost observability)
+
+  The synthesis prompt forbids GPT from using training knowledge about SEU.
+  Only facts present in the retrieved chunks may appear in the answer.
+  On GPT timeout or failure, falls back to returning raw chunks (graceful degradation).
+
 Platform API (v1):
   POST /v1/users/identify    — get or create pseudonymous user
   POST /v1/sessions          — create or resume session
   PATCH /v1/sessions/{id}    — update session context
   POST /v1/sessions/{id}/feedback — submit response feedback
 
-OpenAI classifies intent and translates queries. Corpus is sole source of truth.
+OpenAI classifies intent and synthesizes answers. Corpus is sole source of truth.
 """
 
 import os
@@ -42,6 +51,7 @@ from query_understanding import (
     understand_query,
     build_search_params,
     QueryUnderstanding,
+    SearchParams,
 )
 
 load_dotenv()
@@ -60,13 +70,31 @@ HEADERS = {
     "Content-Type":  "application/json",
 }
 
-MIN_SIMILARITY        = 0.45  # broad search — no course filter
-MIN_SIMILARITY_COURSE = 0.25  # course-filtered — lower ok, scope already constrained
+MIN_SIMILARITY        = 0.45
+MIN_SIMILARITY_COURSE = 0.25
 
-SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
-
-# Session inactivity window: sessions inactive longer than this get a new one created
+SEU_TENANT_ID       = "00000000-0000-0000-0000-000000000001"
 SESSION_TTL_SECONDS = 30 * 60
+
+# Synthesis prompt — hard corpus-only constraint
+_SYNTHESIS_SYSTEM = """\
+You are a study assistant for Saudi Electronic University (SEU) students.
+Your ONLY job is to answer the student's question using the provided source chunks.
+
+Rules (non-negotiable):
+- Use ONLY facts explicitly present in the source chunks below. Nothing else.
+- If the answer is not clearly in the chunks, respond with this exact phrase:
+  "ما لقيت إجابة واضحة في المواد المتاحة — جرّب تسأل بطريقة ثانية أو اذكر رمز المادة."
+- Write in Gulf Arabic if the question is in Arabic. Write in English if in English.
+- Maximum 200 words. Be direct and concise.
+- Do NOT invent, extrapolate, or use outside knowledge about SEU or any university.
+- Do NOT mention professor names or predict unreleased exam content.
+- Do NOT add meta-commentary, disclaimers, or explain what you're doing.\
+"""
+
+_SYNTHESIS_USER = "Student question: {query}\n\nSource chunks:\n{chunks}"
+
+_SYNTHESIS_TIMEOUT = 12.0  # seconds; on timeout, fall back to chunk display
 
 
 # ---------------------------------------------------------------------------
@@ -79,7 +107,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="RUMMAN Platform API", version="3.0", lifespan=lifespan)
+app = FastAPI(title="RUMMAN Platform API", version="4.0", lifespan=lifespan)
 ai  = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
@@ -94,6 +122,13 @@ class SearchRequest(BaseModel):
     source_type: str | None  = None
     session_id:  str | None  = None
     user_id:     str | None  = None
+
+
+class SynthesizeRequest(BaseModel):
+    query:      str
+    limit:      int        = Field(default=5, ge=1, le=20)
+    session_id: str | None = None
+    user_id:    str | None = None
 
 
 class UserIdentifyRequest(BaseModel):
@@ -126,7 +161,7 @@ class FeedbackRequest(BaseModel):
 def _tenant_id_for_slug(slug: str) -> str:
     if slug == "seu":
         return SEU_TENANT_ID
-    return SEU_TENANT_ID  # default until multi-tenant expansion
+    return SEU_TENANT_ID
 
 
 def _deduplicate(results: list[dict], limit: int) -> list[dict]:
@@ -167,6 +202,98 @@ async def _retrieve(
 
 
 # ---------------------------------------------------------------------------
+# Shared retrieval pipeline
+# ---------------------------------------------------------------------------
+
+async def _run_retrieval(
+    query: str,
+    limit: int,
+    course_code: str | None = None,
+    source_type: str | None = None,
+) -> tuple[list[dict], list[dict], QueryUnderstanding, list[dict]]:
+    """
+    Run the full retrieval pipeline: understand → embed → retrieve → dedup.
+    Returns (results, all_raw, understanding, params_log).
+    """
+    understanding = await understand_query(query, ai=ai, run_classifier=True)
+    intent = understanding.intent
+
+    if course_code or source_type:
+        param_list = [SearchParams(
+            query=intent.normalized_text if intent else understanding.query_normalized,
+            course_code=course_code,
+            source_type=source_type,
+            limit=limit,
+        )]
+    else:
+        param_list = build_search_params(understanding, limit)
+
+    seen_queries: set[str] = set()
+    all_raw: list[dict] = []
+    params_log: list[dict] = []
+
+    async with httpx.AsyncClient(timeout=30) as http:
+        for params in param_list:
+            q = params.query
+            if q in seen_queries:
+                continue
+            seen_queries.add(q)
+
+            resp = await ai.embeddings.create(
+                model=EMBED_MODEL, input=q, dimensions=EMBED_DIMS
+            )
+            embedding = resp.data[0].embedding
+            fetch_count = min(params.limit * 3, 150)
+            threshold = MIN_SIMILARITY_COURSE if params.course_code else MIN_SIMILARITY
+
+            raw = await _retrieve(http, embedding, params.course_code, params.source_type, fetch_count)
+            for row in raw:
+                if (row.get("similarity") or 0) >= threshold:
+                    all_raw.append(row)
+            params_log.append({
+                "query":       q,
+                "course_code": params.course_code,
+                "source_type": params.source_type,
+            })
+
+    results = _deduplicate(all_raw, limit)
+    return results, all_raw, understanding, params_log
+
+
+# ---------------------------------------------------------------------------
+# Grounded synthesis
+# ---------------------------------------------------------------------------
+
+async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
+    """
+    Call gpt-4o-mini to synthesize a grounded answer from chunks.
+    Returns (answer_text, total_tokens_used).
+    Raises asyncio.TimeoutError on timeout — caller handles fallback.
+    """
+    chunk_text = "\n\n---\n\n".join(
+        f"[{i+1}] {(row.get('content') or '').strip()[:500]}"
+        for i, row in enumerate(chunks[:5])
+    )
+    resp = await asyncio.wait_for(
+        ai.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "system", "content": _SYNTHESIS_SYSTEM},
+                {"role": "user",   "content": _SYNTHESIS_USER.format(
+                    query=query, chunks=chunk_text
+                )},
+            ],
+            temperature=0.1,
+            max_tokens=350,
+        ),
+        timeout=_SYNTHESIS_TIMEOUT,
+    )
+    answer = resp.choices[0].message.content.strip()
+    tokens = resp.usage.total_tokens if resp.usage else 0
+    return answer, tokens
+
+
+# ---------------------------------------------------------------------------
 # Learning event logging (fire-and-forget)
 # ---------------------------------------------------------------------------
 
@@ -198,7 +325,7 @@ async def _log_event(
             "intent_type":        intent.intent_type if intent else None,
             "intent_confidence":  intent.confidence  if intent else None,
             "course_codes":       intent.course_codes if intent else [],
-            "concept_ids":        [],  # populated after concept layer is built
+            "concept_ids":        [],
             "retrieval_count":    result_count,
             "top_similarity":     top_similarity,
             "grounded":           grounded,
@@ -223,13 +350,11 @@ async def _log_event(
 async def identify_user(req: UserIdentifyRequest):
     """
     Get or create a pseudonymous user.
-    The platform_user_hash must be computed by the caller as:
-      SHA-256(RUMMAN_USER_SALT + ":" + platform + ":" + raw_user_id)
+    platform_user_hash = SHA-256(RUMMAN_USER_SALT + ":" + platform + ":" + raw_user_id)
     Raw user IDs are never sent to or stored by the platform.
     """
     tenant_id = _tenant_id_for_slug(req.tenant_slug)
     async with httpx.AsyncClient(timeout=10) as http:
-        # Try to find existing user
         r = await http.get(
             f"{SUPABASE_URL}/rest/v1/rumman_users",
             headers=HEADERS,
@@ -243,7 +368,6 @@ async def identify_user(req: UserIdentifyRequest):
         existing = r.json()
         if existing:
             user = existing[0]
-            # Update last_active_at
             await http.patch(
                 f"{SUPABASE_URL}/rest/v1/rumman_users?id=eq.{user['id']}",
                 headers=HEADERS,
@@ -251,7 +375,6 @@ async def identify_user(req: UserIdentifyRequest):
             )
             return {"user_id": user["id"], "created": False}
 
-        # Create new user
         r = await http.post(
             f"{SUPABASE_URL}/rest/v1/rumman_users",
             headers={**HEADERS, "Prefer": "return=representation"},
@@ -273,18 +396,14 @@ async def identify_user(req: UserIdentifyRequest):
 
 @app.post("/v1/sessions")
 async def create_or_resume_session(req: SessionCreateRequest):
-    """
-    Resume the most recent active session for this user if within TTL,
-    otherwise create a new one.
-    """
+    """Resume the most recent active session if within TTL, else create new."""
     tenant_id = _tenant_id_for_slug(req.tenant_slug)
     async with httpx.AsyncClient(timeout=10) as http:
-        # Look for an active session within TTL
         r = await http.get(
             f"{SUPABASE_URL}/rest/v1/rumman_sessions",
             headers=HEADERS,
             params={
-                "user_id":  f"eq.{req.user_id}",
+                "user_id":   f"eq.{req.user_id}",
                 "is_active": "eq.true",
                 "platform":  f"eq.{req.platform}",
                 "order":     "last_active_at.desc",
@@ -295,24 +414,22 @@ async def create_or_resume_session(req: SessionCreateRequest):
         sessions = r.json()
         if sessions:
             s = sessions[0]
-            # Check TTL
-            last_active = s.get("last_active_at", "")
-            # Parse and check if within SESSION_TTL_SECONDS
             try:
                 from datetime import datetime, timezone
-                last_dt = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
+                last_dt = datetime.fromisoformat(
+                    s.get("last_active_at", "").replace("Z", "+00:00")
+                )
                 age_seconds = (datetime.now(timezone.utc) - last_dt).total_seconds()
                 if age_seconds <= SESSION_TTL_SECONDS:
                     return {
-                        "session_id": s["id"],
-                        "created": False,
+                        "session_id":        s["id"],
+                        "created":           False,
                         "active_course_code": s.get("active_course_code"),
-                        "turn_count": s.get("turn_count", 0),
+                        "turn_count":        s.get("turn_count", 0),
                     }
             except Exception:
-                pass  # fall through to create new
+                pass
 
-        # Create new session
         r = await http.post(
             f"{SUPABASE_URL}/rest/v1/rumman_sessions",
             headers={**HEADERS, "Prefer": "return=representation"},
@@ -350,10 +467,7 @@ async def update_session(session_id: str, req: SessionUpdateRequest):
 
 @app.post("/v1/sessions/{session_id}/feedback")
 async def submit_feedback(session_id: str, req: FeedbackRequest):
-    """
-    Record a user's feedback on the most recent response in a session.
-    Generates a learning_event of type feedback_positive or feedback_negative.
-    """
+    """Record feedback as a learning_event."""
     event_type = "feedback_positive" if req.helpful else "feedback_negative"
     asyncio.create_task(_log_event(
         event_type,
@@ -369,77 +483,30 @@ async def submit_feedback(session_id: str, req: FeedbackRequest):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "3.0"}
+    return {"status": "ok", "version": "4.0"}
 
 
 # ---------------------------------------------------------------------------
-# Search (backward-compatible + session-aware)
+# Search (raw retrieval — for debugging, evaluation, and direct API consumers)
 # ---------------------------------------------------------------------------
 
 @app.post("/search")
 async def search(req: SearchRequest):
     t_start = time.monotonic()
 
-    # Step 1+2: normalize + classify intent
-    understanding = await understand_query(req.query, ai=ai, run_classifier=True)
-    intent = understanding.intent
+    results, all_raw, understanding, params_log = await _run_retrieval(
+        req.query, req.limit, req.course_code, req.source_type
+    )
+    intent    = understanding.intent
+    top_sim   = results[0].get("similarity") if results else None
+    grounded  = len(results) > 0
+    latency   = int((time.monotonic() - t_start) * 1000)
 
-    # Step 3: build search param list
-    if req.course_code or req.source_type:
-        from query_understanding import SearchParams
-        param_list = [SearchParams(
-            query=intent.normalized_text if intent else understanding.query_normalized,
-            course_code=req.course_code,
-            source_type=req.source_type,
-            limit=req.limit,
-        )]
-    else:
-        param_list = build_search_params(understanding, req.limit)
-
-    # Step 4: embed + retrieve per unique query
-    seen_queries: set[str] = set()
-    all_raw: list[dict] = []
-    params_log: list[dict] = []
-
-    async with httpx.AsyncClient(timeout=30) as http:
-        for params in param_list:
-            q = params.query
-            if q in seen_queries:
-                continue
-            seen_queries.add(q)
-
-            resp = await ai.embeddings.create(
-                model=EMBED_MODEL, input=q, dimensions=EMBED_DIMS
-            )
-            embedding = resp.data[0].embedding
-            fetch_count = min(params.limit * 3, 150)
-
-            threshold = MIN_SIMILARITY_COURSE if params.course_code else MIN_SIMILARITY
-            raw = await _retrieve(http, embedding, params.course_code, params.source_type, fetch_count)
-            for row in raw:
-                if (row.get("similarity") or 0) >= threshold:
-                    all_raw.append(row)
-            params_log.append({
-                "query":       q,
-                "course_code": params.course_code,
-                "source_type": params.source_type,
-            })
-
-    # Step 5: dedup
-    results  = _deduplicate(all_raw, req.limit)
-    top_sim  = results[0].get("similarity") if results else None
-    grounded = len(results) > 0
-    latency  = int((time.monotonic() - t_start) * 1000)
-
-    # Step 6: update session focus if course detected
     if req.session_id and intent and intent.course_codes:
         asyncio.create_task(_patch_session_focus(
-            req.session_id,
-            intent.course_codes[0],
-            intent.exam_type,
+            req.session_id, intent.course_codes[0], intent.exam_type,
         ))
 
-    # Step 7: log learning event (replaces query_logs for new writes)
     event_type = "zero_result" if not grounded else "query"
     asyncio.create_task(_log_event(
         event_type,
@@ -453,7 +520,6 @@ async def search(req: SearchRequest):
         metadata={"search_params": params_log},
     ))
 
-    # Build debug info
     debug: dict = {}
     if understanding.classifier_used and intent:
         debug = {
@@ -475,6 +541,86 @@ async def search(req: SearchRequest):
         "latency_ms":       latency,
         "debug":            debug or None,
         "results":          results,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Synthesize (grounded answer from corpus — used by the bot)
+# ---------------------------------------------------------------------------
+
+@app.post("/synthesize")
+async def synthesize(req: SynthesizeRequest):
+    """
+    Retrieve relevant chunks, then synthesize a grounded answer via gpt-4o-mini.
+    The synthesis prompt hard-constrains GPT to only use retrieved chunk content.
+    Falls back to returning raw chunks if synthesis times out or fails.
+    """
+    t_start = time.monotonic()
+
+    results, all_raw, understanding, params_log = await _run_retrieval(
+        req.query, req.limit
+    )
+    intent   = understanding.intent
+    top_sim  = results[0].get("similarity") if results else None
+    grounded = len(results) > 0
+    answer: str | None = None
+    synthesis_tokens = 0
+    synthesis_failed = False
+
+    if grounded:
+        try:
+            answer, synthesis_tokens = await _synthesize_answer(req.query, results)
+        except asyncio.TimeoutError:
+            log.warning("synthesis_timeout | query=%.60s", req.query)
+            synthesis_failed = True
+        except Exception as exc:
+            log.warning("synthesis_error | %s | query=%.60s", exc, req.query)
+            synthesis_failed = True
+
+    latency = int((time.monotonic() - t_start) * 1000)
+
+    if req.session_id and intent and intent.course_codes:
+        asyncio.create_task(_patch_session_focus(
+            req.session_id, intent.course_codes[0], intent.exam_type,
+        ))
+
+    event_type = "zero_result" if not grounded else "synthesis"
+    asyncio.create_task(_log_event(
+        event_type,
+        session_id=req.session_id,
+        user_id=req.user_id,
+        understanding=understanding,
+        result_count=len(results),
+        top_similarity=top_sim,
+        grounded=grounded,
+        latency_ms=latency,
+        metadata={
+            "search_params":      params_log,
+            "synthesis_tokens":   synthesis_tokens,
+            "synthesis_failed":   synthesis_failed,
+        },
+    ))
+
+    # Build source metadata for the response (no raw content — just provenance)
+    sources = [
+        {
+            "course_code": r.get("course_code") or (r.get("metadata") or {}).get("course_code"),
+            "source_type": r.get("source_type"),
+            "similarity":  round(r.get("similarity", 0), 3),
+        }
+        for r in results[:5]
+    ]
+
+    return {
+        "query":             req.query,
+        "grounded":          grounded,
+        "answer":            answer,           # None if not grounded or synthesis failed
+        "synthesis_failed":  synthesis_failed,
+        "source_count":      len(results),
+        "sources":           sources,
+        "latency_ms":        latency,
+        # Fallback chunks — present only when synthesis failed so caller can degrade gracefully
+        "fallback_chunks":   results if synthesis_failed else [],
     }
 
 

@@ -258,16 +258,22 @@ async def classify_intent(
         ]
 
         eq_raw = raw.get("english_query") or ""
-        # Guard against GPT returning the literal string "null"
         english_query = eq_raw.strip() if eq_raw.strip() not in ("", "null", "None") else None
+
+        def _clean(val: object) -> str | None:
+            """Convert GPT's literal string 'null' / falsy values to Python None."""
+            if not val:
+                return None
+            s = str(val).strip()
+            return None if s.lower() in ("null", "none", "") else s
 
         return IntentResult(
             normalized_text=raw.get("normalized_text", query) or query,
             english_query=english_query,
             intent_type=intent_type,
             course_codes=codes,
-            exam_type=raw.get("exam_type"),
-            source_type_filter=raw.get("source_type_filter"),
+            exam_type=_clean(raw.get("exam_type")),
+            source_type_filter=_clean(raw.get("source_type_filter")),
             confidence=float(raw.get("confidence", 0.5)),
             clarification_needed=bool(raw.get("clarification_needed", False)),
             clarification_question=raw.get("clarification_question"),

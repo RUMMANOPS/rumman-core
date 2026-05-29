@@ -81,14 +81,19 @@ _SYNTHESIS_SYSTEM = """\
 You are رمّان (Rummaan) — an intelligent academic companion for Saudi Electronic University students.
 
 Each source chunk is tagged with an authority tier:
-  [OFFICIAL]   — extracted from official university documents (study plans, regulations, course descriptions)
-  [COMMUNITY]  — student-shared materials (exam archives, notes, group discussions)
+  [OFFICIAL]      — extracted from official university documents (study plans, regulations, course descriptions)
+  [COMMUNITY]     — student-shared materials (exam archives, notes, group discussions)
+  [INTELLIGENCE]  — extracted events and announcements from Telegram group messages (deadlines, exams, assignments)
+  [CALENDAR]      — official SEU academic calendar dates
 
 Grounding rules:
 - Use ONLY information present in the provided source chunks. Do not invent or extrapolate.
 - Chunks may be in Arabic or English — understand both; respond in the student's language.
 - When OFFICIAL and COMMUNITY sources agree: answer directly.
 - When they differ or conflict: present the official position first, then note the community perspective.
+- [INTELLIGENCE] items represent what instructors/students actually posted in groups — treat as reliable but community-sourced.
+  If an [INTELLIGENCE] item gives a deadline or exam date, present it clearly with a note it came from a group announcement.
+- [CALENDAR] items are the authoritative official SEU schedule — use them for semester dates.
 - When chunks contain exam questions: identify the topics and concepts they test, present them clearly. Complete and valid — do not hedge.
 - When chunks contain definitions, explanations, or course content: synthesize in your own words. Be the intelligent companion, not a copy-paste machine.
 - When chunks partially answer the question: share what you found and be honest about the gap.
@@ -343,6 +348,85 @@ async def _retrieve_calendar_events(http: httpx.AsyncClient) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
+# Intelligence layer retrieval (community-sourced items: exams, deadlines, …)
+# ---------------------------------------------------------------------------
+
+_INTELLIGENCE_ITEM_LABELS = {
+    "exam":         "اختبار",
+    "deadline":     "موعد تسليم",
+    "assignment":   "واجب",
+    "quiz":         "اختبار قصير",
+    "announcement": "إعلان",
+    "decision":     "قرار",
+    "reminder":     "تذكير",
+    "meeting":      "اجتماع",
+}
+
+
+async def _retrieve_intelligence_items(
+    http: httpx.AsyncClient,
+    course_codes: list[str],
+    item_types: list[str] | None = None,
+    days_back: int = 60,
+) -> list[dict]:
+    """Query intelligence_items for recent community-sourced events.
+    Returns results in the same shape as match_documents rows."""
+    from datetime import date, timedelta
+    cutoff = (date.today() - timedelta(days=days_back)).isoformat()
+
+    params: list[tuple] = [
+        ("tenant_id",   f"eq.{SEU_TENANT_ID}"),
+        ("created_at",  f"gte.{cutoff}"),
+        ("confidence",  "gte.0.70"),
+        ("select",      "item_type,title,description,due_date,course_code,confidence,metadata,created_at"),
+        ("order",       "due_date.asc.nullslast"),
+        ("limit",       "20"),
+    ]
+    if course_codes:
+        params.append(("course_code", f"in.({','.join(course_codes)})"))
+    if item_types:
+        params.append(("item_type", f"in.({','.join(item_types)})"))
+
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/intelligence_items",
+        headers=HEADERS,
+        params=params,
+    )
+    if r.status_code >= 400 or not r.json():
+        return []
+
+    results = []
+    for item in r.json():
+        label   = _INTELLIGENCE_ITEM_LABELS.get(item.get("item_type",""), item.get("item_type",""))
+        title   = item.get("title") or ""
+        desc    = item.get("description") or ""
+        due     = item.get("due_date")
+        code    = item.get("course_code") or ""
+        chat    = (item.get("metadata") or {}).get("chat_name") or "مجموعة"
+
+        lines = [f"[{label}] {title}"]
+        if desc and desc != title:
+            lines.append(desc)
+        if due:
+            lines.append(f"الموعد: {due}")
+        if code:
+            lines.append(f"المادة: {code}")
+        lines.append(f"المصدر: {chat}")
+
+        results.append({
+            "content":          "\n".join(lines),
+            "course_code":      code or None,
+            "source_type":      "telegram_export",
+            "source_authority": "community",
+            "authority_tier":   "community",
+            "similarity":       min(float(item.get("confidence", 0.7)), 0.88),
+            "metadata":         {"origin": "intelligence_items"},
+        })
+
+    return results
+
+
+# ---------------------------------------------------------------------------
 # Shared retrieval pipeline
 # ---------------------------------------------------------------------------
 
@@ -408,6 +492,21 @@ async def _run_retrieval(
             calendar = await _retrieve_calendar_events(http)
             all_raw.extend(calendar)
 
+        # Inject intelligence layer items (community Telegram signals)
+        # Trigger when: course codes detected OR temporal/exam/deadline intents
+        intel_codes   = (understanding.intent.course_codes if understanding.intent else []) or []
+        intel_intent  = understanding.intent.intent_type if understanding.intent else ""
+        intel_types   = None  # fetch all item types when course-specific
+        if intel_intent in ("exam_schedule", "deadline"):
+            intel_types = ["exam", "deadline", "quiz", "reminder"]
+        if intel_codes or intel_intent in ("exam_schedule", "deadline", "concept_explain"):
+            intel = await _retrieve_intelligence_items(
+                http,
+                course_codes=intel_codes,
+                item_types=intel_types,
+            )
+            all_raw.extend(intel)
+
     results = _deduplicate(all_raw, limit)
     return results, all_raw, understanding, params_log
 
@@ -423,8 +522,13 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
     Raises asyncio.TimeoutError on timeout — caller handles fallback.
     """
     def _tier_label(row: dict) -> str:
-        tier = row.get("authority_tier") or (row.get("metadata") or {}).get("origin", "")
-        if tier == "official" or "inst_courses" in tier or "seu_courses" in tier:
+        tier    = row.get("authority_tier") or ""
+        origin  = (row.get("metadata") or {}).get("origin", "")
+        if origin == "academic_calendar":
+            return "[CALENDAR]"
+        if origin == "intelligence_items":
+            return "[INTELLIGENCE]"
+        if tier == "official" or "inst_courses" in origin or "seu_courses" in origin:
             return "[OFFICIAL]"
         return "[COMMUNITY]"
 

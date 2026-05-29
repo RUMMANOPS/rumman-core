@@ -210,6 +210,14 @@ async def upload_to_storage(http: httpx.AsyncClient, file_path: Path, storage_pa
         return True
     if r.status_code == 409:
         return True  # already exists — idempotent
+    # Supabase Storage returns 400 with body {"statusCode":"409"} for duplicates
+    if r.status_code == 400:
+        try:
+            body = r.json()
+            if body.get("statusCode") == "409" or body.get("error") == "Duplicate":
+                return True
+        except Exception:
+            pass
 
     log("STORAGE_UPLOAD_ERROR", status=r.status_code, file=file_path.name, error=r.text[:120])
     return False
@@ -274,8 +282,17 @@ async def ingest_one(http: httpx.AsyncClient, target: IngestTarget, stats: RunSt
 
     folder = f"{INSTITUTION}/{target.source_type}"
     if target.course_code:
-        folder += f"/{target.course_code}"
-    storage_path = f"{folder}/{content_hash[:8]}_{file_name}"
+        # Storage keys must be ASCII-safe — strip non-ASCII from course code too
+        safe_code = re.sub(r"[^\x00-\x7F]+", "", target.course_code).strip()
+        safe_code = re.sub(r"\s+", "_", safe_code)
+        if safe_code:
+            folder += f"/{safe_code}"
+    # Storage keys must be ASCII-safe — strip non-ASCII, collapse spaces to underscores
+    safe_name = re.sub(r"[^\x00-\x7F]+", "", file_name).strip()
+    safe_name = re.sub(r"\s+", "_", safe_name)
+    if not safe_name or safe_name in {".", "_"}:
+        safe_name = path.suffix.lower().lstrip(".") or "bin"
+    storage_path = f"{folder}/{content_hash[:8]}_{safe_name}"
 
     if dry_run:
         log(

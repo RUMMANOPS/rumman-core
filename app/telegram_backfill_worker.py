@@ -530,8 +530,11 @@ async def main():
 
                 # Prime entity cache so PeerChannel lookups succeed without access_hash errors
                 print("PRIMING_ENTITY_CACHE", flush=True)
-                await client.get_dialogs(limit=300)
-                print("ENTITY_CACHE_READY", flush=True)
+                try:
+                    await asyncio.wait_for(client.get_dialogs(limit=200), timeout=120)
+                    print("ENTITY_CACHE_READY", flush=True)
+                except asyncio.TimeoutError:
+                    print("ENTITY_CACHE_TIMEOUT | continuing with partial cache", flush=True)
 
                 while True:
                     job = await claim_job(http)

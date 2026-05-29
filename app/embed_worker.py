@@ -194,6 +194,8 @@ async def embed_and_insert_chunks(
             "source_document_id": doc["id"],
             "content": chunk_text,
             "embedding": embedding,
+            "embedding_model": EMBED_MODEL,
+            "embedding_dims": EMBED_DIMS,
             "institution": doc.get("institution", "SEU"),
             "course_code": doc.get("course_code"),
             "source_type": doc["source_type"],

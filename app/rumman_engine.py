@@ -15,6 +15,7 @@ ENABLE_BACKFILL = False
 
 SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -271,6 +272,7 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
         "reply_to_message_id": str(msg.reply_to_msg_id) if msg.reply_to_msg_id else None,
         "edited_at": msg.edit_date.astimezone(timezone.utc).isoformat() if msg.edit_date else None,
         "raw_json": json.loads(json.dumps(msg.to_dict(), default=str)),
+        "tenant_id": SEU_TENANT_ID,
         "metadata": {
             "source": source,
             "size_bytes": fm["size_bytes"],

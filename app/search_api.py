@@ -70,8 +70,8 @@ HEADERS = {
     "Content-Type":  "application/json",
 }
 
-MIN_SIMILARITY        = 0.45
-MIN_SIMILARITY_COURSE = 0.25
+MIN_SIMILARITY        = 0.40  # broad search — lowered from 0.45; Arabic queries hit ~0.40–0.44
+MIN_SIMILARITY_COURSE = 0.25  # course-filtered — scope already constrained
 
 SEU_TENANT_ID       = "00000000-0000-0000-0000-000000000001"
 SESSION_TTL_SECONDS = 30 * 60
@@ -79,11 +79,14 @@ SESSION_TTL_SECONDS = 30 * 60
 # Synthesis prompt — hard corpus-only constraint
 _SYNTHESIS_SYSTEM = """\
 You are a study assistant for Saudi Electronic University (SEU) students.
-Your ONLY job is to answer the student's question using the provided source chunks.
+Answer the student's question using the provided source chunks.
 
 Rules (non-negotiable):
-- Use ONLY facts explicitly present in the source chunks below. Nothing else.
-- If the answer is not clearly in the chunks, respond with this exact phrase:
+- Use ONLY information present in or directly derivable from the source chunks.
+- You MAY enumerate and summarize topics, concepts, or processes that appear in the chunks —
+  including when the chunks are exam questions rather than prose explanations.
+- If the chunks contain relevant exam questions, list the topics/concepts those questions cover.
+- If the answer truly cannot be derived from the chunks at all, respond with this exact phrase:
   "ما لقيت إجابة واضحة في المواد المتاحة — جرّب تسأل بطريقة ثانية أو اذكر رمز المادة."
 - Write in Gulf Arabic if the question is in Arabic. Write in English if in English.
 - Maximum 200 words. Be direct and concise.

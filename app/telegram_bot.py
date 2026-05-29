@@ -191,8 +191,17 @@ async def _synthesize(
 # Result formatting
 # ---------------------------------------------------------------------------
 
-def _format_synthesis(data: dict) -> str:
+def _format_synthesis(data: dict, query: str = "") -> str:
     if not data.get("grounded"):
+        # Try to give a more specific message if we can detect a course code
+        import re
+        course_match = re.search(r'\b([A-Z]{2,4}\d{3})\b', query.upper())
+        if course_match:
+            code = course_match.group(1)
+            return (
+                f"ما عندي محتوى لمادة <b>{code}</b> في قاعدة البيانات حالياً.\n\n"
+                f"جرّب مادة ثانية أو اسألني سؤالاً عاماً."
+            )
         return _NO_RESULTS
 
     # Synthesis succeeded
@@ -290,7 +299,7 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         await _send(http, chat_id, _ERROR)
         return
 
-    reply    = _format_synthesis(data)
+    reply    = _format_synthesis(data, query=text)
     grounded = data.get("grounded", False)
 
     # Attach feedback buttons only when results were returned

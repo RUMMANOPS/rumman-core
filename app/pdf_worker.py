@@ -165,11 +165,13 @@ async def delete_from_storage(http: httpx.AsyncClient, storage_path: str) -> boo
     if len(parts) != 2:
         return False
     bucket, obj_path = parts[0], parts[1]
-    r = await http.delete(
+    import json as _json
+    r = await http.request(
+        "DELETE",
         f"{SUPABASE_URL}/storage/v1/object/{bucket}",
         headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
                  "Content-Type": "application/json"},
-        json={"prefixes": [obj_path]},
+        content=_json.dumps({"prefixes": [obj_path]}).encode(),
     )
     if r.status_code >= 400:
         log("STORAGE_DELETE_ERROR", status=r.status_code, path=storage_path)

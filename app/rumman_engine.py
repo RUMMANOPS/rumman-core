@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from telethon.tl.types import Chat, Channel
+from telethon.errors import AuthKeyDuplicatedError
 
 load_dotenv()
 
@@ -365,4 +366,18 @@ async def main():
         await client.run_until_disconnected()
 
 
-asyncio.run(main())
+async def _run_with_retry():
+    """Outer retry loop: handles AuthKeyDuplicatedError from rolling restarts."""
+    RETRY_DELAY = 90  # seconds — long enough for the old container to fully exit
+    while True:
+        try:
+            await main()
+            break  # clean exit
+        except AuthKeyDuplicatedError:
+            print(f"AUTH_KEY_DUPLICATED | retrying in {RETRY_DELAY}s", flush=True)
+            await asyncio.sleep(RETRY_DELAY)
+        except Exception as e:
+            print(f"FATAL_ERROR | {e}", flush=True)
+            raise
+
+asyncio.run(_run_with_retry())

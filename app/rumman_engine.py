@@ -7,6 +7,7 @@ import httpx
 from dotenv import load_dotenv
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from telethon.tl.types import Chat, Channel
 
 load_dotenv()
 
@@ -25,6 +26,10 @@ HEADERS = {
 # college_id lookup: populated at startup from seu_colleges.telegram_chat_ids
 _COLLEGE_BY_CHAT: dict[str, str] = {}
 
+# backfill registry: platform_chat_ids that already have a telegram_backfill_jobs row
+# prevents creating duplicate jobs on every new message from known chats
+_BACKFILL_REGISTERED: set[str] = set()
+
 
 async def load_college_chat_map(http: httpx.AsyncClient) -> None:
     r = await http.get(
@@ -39,6 +44,90 @@ async def load_college_chat_map(http: httpx.AsyncClient) -> None:
         for cid in (row.get("telegram_chat_ids") or []):
             _COLLEGE_BY_CHAT[str(cid)] = row["id"]
     print(f"COLLEGE_MAP_LOADED | chats={len(_COLLEGE_BY_CHAT)}", flush=True)
+
+
+async def load_backfill_registry(http: httpx.AsyncClient) -> None:
+    """Load all platform_chat_ids that already have backfill jobs into the in-memory registry."""
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
+        headers=HEADERS,
+        params={"select": "platform_chat_id", "limit": "5000"},
+    )
+    if r.status_code >= 400:
+        print(f"BACKFILL_REGISTRY_LOAD_ERROR | status={r.status_code}", flush=True)
+        return
+    for row in r.json():
+        _BACKFILL_REGISTERED.add(row["platform_chat_id"])
+    print(f"BACKFILL_REGISTRY_LOADED | known_chats={len(_BACKFILL_REGISTERED)}", flush=True)
+
+
+async def ensure_backfill_job(
+    http: httpx.AsyncClient,
+    platform_chat_id: str,
+    chat_name: str,
+    chat_type: str,
+) -> None:
+    """Create a pending backfill job for this chat if one doesn't already exist."""
+    if platform_chat_id in _BACKFILL_REGISTERED:
+        return
+    r = await http.post(
+        f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
+        headers=HEADERS,
+        json={
+            "platform_chat_id": platform_chat_id,
+            "chat_name": chat_name,
+            "chat_type": chat_type,
+            "status": "pending",
+            "batch_size": 500,
+            "retry_count": 0,
+        },
+    )
+    if r.status_code in (200, 201):
+        _BACKFILL_REGISTERED.add(platform_chat_id)
+        print(f"BACKFILL_AUTO_CREATED | chat={chat_name} | id={platform_chat_id}", flush=True)
+    elif r.status_code == 409:
+        _BACKFILL_REGISTERED.add(platform_chat_id)  # exists, register it
+    else:
+        print(f"BACKFILL_CREATE_ERROR | chat={chat_name} | status={r.status_code}", flush=True)
+
+
+async def discover_and_register_groups(client: TelegramClient, http: httpx.AsyncClient) -> None:
+    """
+    Enumerate all Telegram dialogs the collector account is in and create pending
+    backfill jobs for any group not already tracked. Called once at startup.
+
+    This ensures that groups joined while the listener was offline are automatically
+    queued for historical ingestion on next restart. Does NOT fetch messages (not
+    a historical crawl — only enumerates the dialog list).
+    """
+    count_new = 0
+    count_known = 0
+
+    async for dialog in client.iter_dialogs():
+        entity = dialog.entity
+
+        if not isinstance(entity, (Chat, Channel)):
+            continue  # skip private DMs
+
+        chat_id = str(dialog.id)
+        chat_name = getattr(entity, "title", None) or f"Chat {chat_id}"
+
+        if isinstance(entity, Channel) and entity.broadcast:
+            chat_type = "channel"
+        else:
+            chat_type = "group"
+
+        if chat_id in _BACKFILL_REGISTERED:
+            count_known += 1
+            continue
+
+        await ensure_backfill_job(http, chat_id, chat_name, chat_type)
+        count_new += 1
+
+    print(
+        f"GROUP_DISCOVERY_DONE | new_jobs={count_new} | already_known={count_known}",
+        flush=True,
+    )
 
 
 def message_type(msg):
@@ -205,6 +294,8 @@ async def process_message(http, msg, chat_name, chat_type, chat_id, source):
 
     if result == "inserted":
         await update_sync_state(http, payload)
+        # Auto-create backfill job on first message from any previously unknown chat
+        await ensure_backfill_job(http, str(chat_id), chat_name, chat_type)
 
 
 async def historical_backfill(client):
@@ -227,7 +318,9 @@ async def main():
     print(f"LOGGED_IN: {me.id}")
 
     async with httpx.AsyncClient(timeout=30) as http:
+        await load_backfill_registry(http)
         await load_college_chat_map(http)
+        await discover_and_register_groups(client, http)
 
         @client.on(events.NewMessage)
         async def new_message_handler(event):

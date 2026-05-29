@@ -43,7 +43,7 @@ HEADERS = {
 }
 
 SYSTEM_PROMPT = """\
-You are RUMMAN Intelligence Engine analyzing Saudi university Telegram messages.
+You are رمّان (Rummaan) Intelligence Engine analyzing Saudi university Telegram messages.
 
 Extract ONLY items with clear operational value:
 - assignment: homework, project, deliverable

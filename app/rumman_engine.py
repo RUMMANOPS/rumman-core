@@ -22,6 +22,24 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
+# college_id lookup: populated at startup from seu_colleges.telegram_chat_ids
+_COLLEGE_BY_CHAT: dict[str, str] = {}
+
+
+async def load_college_chat_map(http: httpx.AsyncClient) -> None:
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/seu_colleges",
+        headers=HEADERS,
+        params={"select": "id,telegram_chat_ids"},
+    )
+    if r.status_code >= 400:
+        print(f"COLLEGE_MAP_LOAD_ERROR | status={r.status_code}", flush=True)
+        return
+    for row in r.json():
+        for cid in (row.get("telegram_chat_ids") or []):
+            _COLLEGE_BY_CHAT[str(cid)] = row["id"]
+    print(f"COLLEGE_MAP_LOADED | chats={len(_COLLEGE_BY_CHAT)}", flush=True)
+
 
 def message_type(msg):
     if getattr(msg, "poll", None):
@@ -168,6 +186,7 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
             "source": source,
             "size_bytes": fm["size_bytes"],
             "is_forward": bool(getattr(msg, "fwd_from", None)),
+            "college_id": _COLLEGE_BY_CHAT.get(str(chat_id)),
         },
     }
 
@@ -207,26 +226,28 @@ async def main():
 
     print(f"LOGGED_IN: {me.id}")
 
-    @client.on(events.NewMessage)
-    async def new_message_handler(event):
-        try:
-            chat = await event.get_chat()
+    async with httpx.AsyncClient(timeout=30) as http:
+        await load_college_chat_map(http)
 
-            chat_name = (
-                getattr(chat, "title", None)
-                or getattr(chat, "first_name", None)
-                or "Unknown"
-            )
+        @client.on(events.NewMessage)
+        async def new_message_handler(event):
+            try:
+                chat = await event.get_chat()
 
-            chat_type = (
-                "private"
-                if event.is_private
-                else "channel"
-                if event.is_channel
-                else "group"
-            )
+                chat_name = (
+                    getattr(chat, "title", None)
+                    or getattr(chat, "first_name", None)
+                    or "Unknown"
+                )
 
-            async with httpx.AsyncClient(timeout=30) as http:
+                chat_type = (
+                    "private"
+                    if event.is_private
+                    else "channel"
+                    if event.is_channel
+                    else "group"
+                )
+
                 await process_message(
                     http=http,
                     msg=event.message,
@@ -236,17 +257,17 @@ async def main():
                     source="live",
                 )
 
-        except Exception as e:
-            print("LIVE_ERROR", str(e))
+            except Exception as e:
+                print("LIVE_ERROR", str(e))
 
-    if ENABLE_BACKFILL:
-        await historical_backfill(client)
-    else:
-        print("\nHISTORICAL BACKFILL DISABLED\n")
+        if ENABLE_BACKFILL:
+            await historical_backfill(client)
+        else:
+            print("\nHISTORICAL BACKFILL DISABLED\n")
 
-    print("\nLIVE LISTENER ACTIVE\n")
+        print("\nLIVE LISTENER ACTIVE\n")
 
-    await client.run_until_disconnected()
+        await client.run_until_disconnected()
 
 
 asyncio.run(main())

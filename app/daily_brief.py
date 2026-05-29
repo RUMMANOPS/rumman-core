@@ -31,6 +31,8 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
+SEU_TENANT_ID = os.environ.get("SEU_TENANT_ID", "00000000-0000-0000-0000-000000000001")
+
 WORKER = "daily_brief_v1"
 PROMPT_VERSION = "v1"
 MODEL = "gpt-4o-mini"
@@ -197,12 +199,12 @@ async def store_items(
             message_ids[i] for i in indices if 0 <= i < len(message_ids)
         ] or message_ids[:5]
 
-        content = item.get("content") or item.get("description", "")
+        content = item.get("content", "")
         if not content:
             continue
 
         rows.append({
-            "tenant_id": "default",
+            "tenant_id": SEU_TENANT_ID,
             "item_type": item["type"],
             "content": content,
             "due_date": item.get("due_date"),
@@ -306,7 +308,7 @@ async def process_chat(
     run_id = None
     if not dry_run:
         run_id = await create_brief_run(http, {
-            "tenant_id": "default",
+            "tenant_id": SEU_TENANT_ID,
             "worker": WORKER,
             "prompt_version": PROMPT_VERSION,
             "model": MODEL,

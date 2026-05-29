@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-seed_courses.py — Seeds courses, prerequisites, and description embeddings.
+seed_courses.py — Populates seu_courses with names, credit hours, levels, and prerequisites.
 
 Usage:
     python3 scripts/seed_courses.py                  # seed all programs
     python3 scripts/seed_courses.py --dry-run        # validate JSON, no DB writes
-    python3 scripts/seed_courses.py --embed          # also embed course descriptions
+    python3 scripts/seed_courses.py --embed          # also embed descriptions into document_chunks
     python3 scripts/seed_courses.py --program BSCS   # one program only
 
+Targets: seu_courses (migration 008), document_chunks (--embed only).
+Conflict strategy: merge-duplicates on (tenant_id, code) — preserves specialization_id.
+
 Requires:
-    - supabase/migrations/003_knowledge_layer.sql applied
-    - SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY env vars
+    - supabase/migrations/008_curriculum_foundations.sql applied
+    - SUPABASE_URL, SUPABASE_KEY env vars (plus OPENAI_API_KEY for --embed)
 """
 
 import os
@@ -30,7 +33,7 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
-INSTITUTION = "SEU"
+SEU_TENANT_ID = os.environ.get("SEU_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 EMBED_MODEL = "text-embedding-3-large"
 EMBED_DIMS = 1536
 
@@ -51,58 +54,47 @@ def log(event: str, **kwargs):
 
 async def upsert_course(http: httpx.AsyncClient, row: dict) -> str:
     r = await http.post(
-        f"{SUPABASE_URL}/rest/v1/courses",
+        f"{SUPABASE_URL}/rest/v1/seu_courses",
         headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
-        params={"on_conflict": "course_code,institution"},
+        params={"on_conflict": "tenant_id,code"},
         json=row,
     )
     if r.status_code >= 400:
-        log("COURSE_UPSERT_ERROR", code=row["course_code"], status=r.status_code, error=r.text[:120])
+        log("COURSE_UPSERT_ERROR", code=row["code"], status=r.status_code, error=r.text[:120])
         return "error"
     return "upserted"
 
 
-async def upsert_prerequisite(http: httpx.AsyncClient, row: dict) -> str:
-    r = await http.post(
-        f"{SUPABASE_URL}/rest/v1/course_prerequisites",
-        headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
-        params={"on_conflict": "course_code,institution,prereq_code,prereq_institution"},
-        json=row,
-    )
-    if r.status_code >= 400:
-        log("PREREQ_UPSERT_ERROR", status=r.status_code, error=r.text[:120])
-        return "error"
-    return "upserted"
-
-
-async def embed_description(ai: AsyncOpenAI, http: httpx.AsyncClient, course: dict, program: dict) -> bool:
-    description = course.get("description", "").strip()
-    if not description:
-        return False
-
-    course_code = course["course_code"]
-    text = f"{course['course_title']} ({course_code})\n\n{description}"
-
+async def embed_description(
+    ai: AsyncOpenAI,
+    http: httpx.AsyncClient,
+    course_code: str,
+    course_title: str,
+    description: str,
+    language: str,
+) -> bool:
+    text = f"{course_title} ({course_code})\n\n{description}"
     try:
         resp = await ai.embeddings.create(model=EMBED_MODEL, input=text, dimensions=EMBED_DIMS)
         embedding = resp.data[0].embedding
 
-        chunk_row = {
-            "institution": INSTITUTION,
-            "course_code": course_code,
-            "source_type": "course_description",
-            "content": text,
-            "embedding": embedding,
-            "chunk_index": 0,
-            "total_chunks": 1,
-            "language": program.get("language", "en"),
-        }
-
         r = await http.post(
             f"{SUPABASE_URL}/rest/v1/document_chunks",
             headers=HEADERS,
-            json=chunk_row,
+            json={
+                "tenant_id":    SEU_TENANT_ID,
+                "course_code":  course_code,
+                "source_type":  "course_description",
+                "source_authority": "official",
+                "content":      text,
+                "embedding":    embedding,
+                "chunk_index":  0,
+                "total_chunks": 1,
+                "language":     language,
+            },
         )
+        if r.status_code == 409:
+            return True  # already embedded
         if r.status_code >= 400:
             log("EMBED_INSERT_ERROR", course=course_code, status=r.status_code, error=r.text[:120])
             return False
@@ -117,78 +109,60 @@ async def embed_description(ai: AsyncOpenAI, http: httpx.AsyncClient, course: di
 
 async def seed_program(
     http: httpx.AsyncClient,
-    ai: AsyncOpenAI,
+    ai: AsyncOpenAI | None,
     program: dict,
     dry_run: bool,
     embed: bool,
 ) -> dict:
     prog_code = program["program"]
     courses = program["courses"]
+    language = program.get("language", "en")
     log("PROGRAM_START", program=prog_code, courses=len(courses))
 
-    inserted = 0
-    prereq_inserted = 0
-    embed_inserted = 0
+    upserted = 0
+    embedded = 0
     errors = 0
 
     for course in courses:
-        course_code = course["course_code"]
+        code = course["course_code"]
+        title = course["course_title"]
+        prereqs = course.get("prerequisites") or []
+        description = (course.get("description") or "").strip()
+
         row = {
-            "course_code": course_code,
-            "institution": INSTITUTION,
-            "course_title": course["course_title"],
+            "tenant_id":    SEU_TENANT_ID,
+            "code":         code,
+            "name_en":      title,
             "credit_hours": course["credit_hours"],
-            "level": course.get("level"),
-            "program": prog_code,
-            "college": program.get("college"),
-            "college_ar": program.get("college_ar"),
-            "description": course.get("description"),
-            "language": program.get("language", "en"),
+            "level":        course.get("level"),
+            "prerequisites": prereqs,
+            # specialization_id preserved via merge-duplicates; not overwritten
         }
 
         if dry_run:
-            print(f"  [DRY] COURSE {course_code} — {course['course_title']}")
-            for prereq in course.get("prerequisites", []):
-                print(f"    [DRY] PREREQ {course_code} → {prereq}")
+            prereq_str = f"prereqs={prereqs}" if prereqs else ""
+            print(f"  [DRY] {code} — {title} {prereq_str}".strip())
         else:
             result = await upsert_course(http, row)
             if result == "error":
                 errors += 1
                 continue
-            inserted += 1
+            upserted += 1
 
-            for prereq_code in course.get("prerequisites", []):
-                prereq_row = {
-                    "course_code": course_code,
-                    "institution": INSTITUTION,
-                    "prereq_code": prereq_code,
-                    "prereq_institution": INSTITUTION,
-                }
-                pr = await upsert_prerequisite(http, prereq_row)
-                if pr == "upserted":
-                    prereq_inserted += 1
-
-            if embed and course.get("description"):
-                ok = await embed_description(ai, http, course, program)
+            if embed and description and ai:
+                ok = await embed_description(ai, http, code, title, description, language)
                 if ok:
-                    embed_inserted += 1
+                    embedded += 1
 
-    log(
-        "PROGRAM_DONE",
-        program=prog_code,
-        courses_upserted=inserted,
-        prereqs_upserted=prereq_inserted,
-        embeddings=embed_inserted,
-        errors=errors,
-    )
-    return {"inserted": inserted, "prereqs": prereq_inserted, "embeddings": embed_inserted, "errors": errors}
+    log("PROGRAM_DONE", program=prog_code, upserted=upserted, embedded=embedded, errors=errors)
+    return {"upserted": upserted, "embedded": embedded, "errors": errors}
 
 
 async def main():
-    parser = argparse.ArgumentParser(description="Seed SEU courses into RUMMAN database")
+    parser = argparse.ArgumentParser(description="Seed SEU courses into seu_courses table")
     parser.add_argument("--dry-run", action="store_true", help="Validate data without DB writes")
-    parser.add_argument("--embed", action="store_true", help="Also embed course descriptions into document_chunks")
-    parser.add_argument("--program", type=str, default=None, help="Seed a specific program only (e.g. BSCS)")
+    parser.add_argument("--embed", action="store_true", help="Embed descriptions into document_chunks")
+    parser.add_argument("--program", type=str, default=None, help="Seed one program only (e.g. BSCS)")
     args = parser.parse_args()
 
     if not DATA_FILE.exists():
@@ -205,24 +179,20 @@ async def main():
             print(f"ERROR: Program '{args.program}' not found in data file", file=sys.stderr)
             sys.exit(1)
 
-    log("SEED_START", institution=data["institution"], programs=len(programs), dry_run=args.dry_run, embed=args.embed)
+    log("SEED_START", institution=data["institution"], programs=len(programs),
+        dry_run=args.dry_run, embed=args.embed)
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY) if args.embed else None
 
     async with httpx.AsyncClient(timeout=60) as http:
-        totals = {"inserted": 0, "prereqs": 0, "embeddings": 0, "errors": 0}
+        totals: dict[str, int] = {"upserted": 0, "embedded": 0, "errors": 0}
         for program in programs:
             result = await seed_program(http, ai, program, args.dry_run, args.embed)
             for k in totals:
                 totals[k] += result.get(k, 0)
 
-    log(
-        "SEED_DONE",
-        total_courses=totals["inserted"],
-        total_prereqs=totals["prereqs"],
-        total_embeddings=totals["embeddings"],
-        total_errors=totals["errors"],
-    )
+    log("SEED_DONE", total_upserted=totals["upserted"],
+        total_embedded=totals["embedded"], total_errors=totals["errors"])
 
 
 if __name__ == "__main__":

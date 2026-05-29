@@ -207,6 +207,74 @@ async def _retrieve(
 
 
 # ---------------------------------------------------------------------------
+# Structured curriculum query (institutional layer — bypasses vector search)
+# ---------------------------------------------------------------------------
+
+async def _retrieve_curriculum_facts(
+    http: httpx.AsyncClient,
+    course_codes: list[str],
+) -> list[dict]:
+    """Query seu_courses directly for authoritative course metadata.
+    Returns results in the same shape as match_documents rows so they flow
+    through the same dedup/synthesis pipeline without special-casing."""
+    if not course_codes:
+        return []
+
+    filter_val = f"in.({','.join(course_codes)})"
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/seu_courses",
+        headers=HEADERS,
+        params={
+            "code": filter_val,
+            "tenant_id": f"eq.{SEU_TENANT_ID}",
+            "select": "code,name_ar,name_en,credit_hours,level,is_required,prerequisites",
+            "limit": "10",
+        },
+    )
+    if r.status_code >= 400:
+        log.warning("curriculum_facts_error | status=%s", r.status_code)
+        return []
+
+    facts = []
+    for row in r.json():
+        code = row.get("code", "")
+        name_ar = row.get("name_ar") or ""
+        name_en = row.get("name_en") or ""
+        credits  = row.get("credit_hours")
+        level    = row.get("level")
+        is_req   = row.get("is_required")
+        prereqs  = row.get("prerequisites") or []
+
+        if not (name_ar or name_en):
+            continue  # seed not yet run — no useful content to inject
+
+        lines = [f"المقرر: {code}"]
+        if name_en:
+            lines.append(f"الاسم (إنجليزي): {name_en}")
+        if name_ar:
+            lines.append(f"الاسم (عربي): {name_ar}")
+        if credits:
+            lines.append(f"الساعات المعتمدة: {credits}")
+        if level:
+            lines.append(f"المستوى الدراسي: {level}")
+        if is_req is not None:
+            lines.append("مقرر إلزامي" if is_req else "مقرر اختياري")
+        if prereqs:
+            lines.append(f"المتطلبات السابقة: {', '.join(prereqs)}")
+
+        facts.append({
+            "content":          "\n".join(lines),
+            "course_code":      code,
+            "source_type":      "course_description",
+            "source_authority": "official",
+            "similarity":       0.95,  # exact code match — treat as top result
+            "metadata":         {"origin": "seu_courses"},
+        })
+
+    return facts
+
+
+# ---------------------------------------------------------------------------
 # Shared retrieval pipeline
 # ---------------------------------------------------------------------------
 
@@ -260,6 +328,11 @@ async def _run_retrieval(
                 "course_code": params.course_code,
                 "source_type": params.source_type,
             })
+
+        # Inject structured course facts for any detected course codes (institutional layer)
+        if understanding.intent and understanding.intent.course_codes:
+            curriculum = await _retrieve_curriculum_facts(http, understanding.intent.course_codes)
+            all_raw.extend(curriculum)
 
     results = _deduplicate(all_raw, limit)
     return results, all_raw, understanding, params_log

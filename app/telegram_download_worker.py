@@ -433,7 +433,7 @@ async def main():
 
     while True:
         client = TelegramClient(
-            StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
+            StringSession(os.environ.get("TELEGRAM_WORKER_SESSION_STRING") or os.environ["TELEGRAM_SESSION_STRING"]),
             int(os.environ["TELEGRAM_API_ID"]),
             os.environ["TELEGRAM_API_HASH"],
         )

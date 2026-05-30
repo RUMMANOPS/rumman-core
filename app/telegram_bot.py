@@ -2,8 +2,10 @@
 """
 telegram_bot.py — Student-facing Telegram bot for RUMMAN search.
 
-Long-polls Telegram Bot API, forwards every text message to the
-/search endpoint, and returns the top 3 grounded results.
+Long-polls Telegram Bot API, classifies every message through a two-layer
+router (fast pattern match → gpt-4o-mini LLM classifier), then routes to:
+  - Direct response (greeting, capability, identity, meta-conversation)
+  - Retrieval + synthesis (academic queries)
 
 Platform identity:
   Each chat_id is hashed as SHA-256(RUMMAN_USER_SALT:telegram:chat_id).
@@ -12,6 +14,7 @@ Platform identity:
 Environment:
   TELEGRAM_BOT_TOKEN   — bot token from @BotFather
   SEARCH_API_URL       — internal Railway URL of the search service
+  OPENAI_API_KEY       — used by the assistant layer classifier
   RUMMAN_USER_SALT     — secret salt for user hash derivation
 """
 
@@ -24,6 +27,7 @@ import time
 from collections import deque
 import httpx
 from dotenv import load_dotenv
+from openai import AsyncOpenAI
 
 load_dotenv()
 logging.basicConfig(
@@ -35,17 +39,34 @@ log = logging.getLogger(__name__)
 BOT_TOKEN         = os.environ["TELEGRAM_BOT_TOKEN"]
 SEARCH_API_URL    = os.environ["SEARCH_API_URL"].rstrip("/")
 RUMMAN_USER_SALT  = os.environ.get("RUMMAN_USER_SALT", "")
+OPENAI_API_KEY    = os.environ.get("OPENAI_API_KEY", "")
 TG_BASE           = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-SESSION_LOCAL_TTL = 25 * 60  # local cache TTL; server TTL is 30 min
-_CACHE_MAX_ENTRIES = 50_000   # evict oldest 20% when exceeded
+_ai = AsyncOpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
-_USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id (no TTL — user IDs are stable)
-_SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
-_ENROLLED:      dict[int, list[str]]         = {}  # chat_id → enrolled course codes
-_PROMPTED_FOR_COURSES: set[int]              = set()  # chats that received the onboarding nudge
-_HISTORY_MAX_TURNS = 6  # 3 user + 3 assistant messages
-_HISTORY_CACHE: dict[int, deque] = {}  # chat_id → deque of {"role", "content"}
+SESSION_LOCAL_TTL = 25 * 60
+_CACHE_MAX_ENTRIES = 50_000
+
+_USER_CACHE:    dict[int, str]               = {}
+_SESSION_CACHE: dict[int, tuple[str, float]] = {}
+_ENROLLED:      dict[int, list[str]]         = {}
+_PROMPTED_FOR_COURSES: set[int]              = set()
+_HISTORY_MAX_TURNS = 6
+_HISTORY_CACHE: dict[int, deque]             = {}
+
+_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
+
+_ACADEMIC_KEYWORDS = {
+    "اختبار", "امتحان", "ميدترم", "فاينل", "فينال", "كويز",
+    "ملخص", "ملخصات", "تجميع", "تجميعات",
+    "مادة", "كورس", "مقرر", "مساق",
+    "واجب", "اسايمنت", "برجكت", "مشروع",
+    "تسليم", "ديدلاين", "موعد",
+    "شرح", "سلايد", "بوربوينت",
+    "خطة", "تخصص", "برنامج",
+    "midterm", "final", "exam", "quiz", "assignment", "project",
+    "summary", "notes", "deadline",
+}
 
 _COURSE_NUDGE = (
     "\n\n💡 <i>لتحسين إجاباتي لموادك تحديداً، أرسل:\n"
@@ -53,28 +74,10 @@ _COURSE_NUDGE = (
     "وسأفيلتر النتائج حسب موادك.</i>"
 )
 
-_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
+# ---------------------------------------------------------------------------
+# Static responses
+# ---------------------------------------------------------------------------
 
-
-def _evict_expired_sessions() -> None:
-    now = time.monotonic()
-    expired = [k for k, (_, exp) in _SESSION_CACHE.items() if exp < now]
-    for k in expired:
-        del _SESSION_CACHE[k]
-    if len(_USER_CACHE) > _CACHE_MAX_ENTRIES:
-        # Evict oldest 20% of user cache entries (dict insertion order preserved in Python 3.7+)
-        evict_count = len(_USER_CACHE) // 5
-        for k in list(_USER_CACHE.keys())[:evict_count]:
-            del _USER_CACHE[k]
-
-_NO_RESULTS = (
-    "ما لقيت شي واضح في المواد المتاحة عن هذا السؤال.\n\n"
-    "جرّب:\n"
-    "• اذكر رمز المادة (مثل: IT362، MGT425)\n"
-    "• اسأل عن موضوع محدد (ميدترم، فاينل، ملخص)\n"
-    "• مثال: <i>وش يجي بالميدترم IT362</i>"
-)
-_ERROR   = "حدث خطأ، حاول مرة ثانية."
 _WELCOME = (
     "أهلاً! أنا رمّان 📚\n\n"
     "مساعدك الأكاديمي لطلاب SEU — أجيبك من مصادر حقيقية:\n"
@@ -95,26 +98,123 @@ _IDENTITY = (
     "• محتوى المقررات والخطط الدراسية\n\n"
     "اسألني عن أي مادة — أسئلة الاختبار، المحتوى، المتطلبات، أو أي شيء تحتاجه."
 )
+_CAPABILITY = (
+    "أقدر أساعدك في:\n\n"
+    "📝 <b>الاختبارات</b> — تجميعات، أسئلة متوقعة، مواضيع مهمة\n"
+    "📚 <b>المواد</b> — ملخصات، شروحات، سلايدات\n"
+    "🗓 <b>المواعيد</b> — تواريخ تسليم، مواعيد اختبارات\n"
+    "📋 <b>الخطط الدراسية</b> — متطلبات، تخصصات، ساعات معتمدة\n"
+    "📜 <b>اللوائح</b> — أنظمة الجامعة، إجراءات القبول والتسجيل\n\n"
+    "ما أقدر عليه:\n"
+    "• أجاوب أسئلة بالعربي والإنجليزي\n"
+    "• أرجع دايماً لمصادر حقيقية (رسمية أو طلابية)\n"
+    "• أذكر من وين جت المعلومة\n\n"
+    "ما أقدر عليه حالياً:\n"
+    "• استقبال ملفات مباشرة (قريباً)\n"
+    "• الإجابة عن أسئلة خارج السياق الأكاديمي لـ SEU"
+)
+_USER_IDENTITY = (
+    "أنا ما عندي معلومات شخصية عنك سوى رقم محادثتك.\n\n"
+    "لو سجلت موادك، أقدر أخصص إجاباتي:\n"
+    "<code>/mycourses IT362 CS251 MGT311</code>"
+)
+_NO_RESULTS = (
+    "ما لقيت إجابة في المواد المتاحة.\n\n"
+    "جرّب:\n"
+    "• اذكر رمز المادة (مثل: IT362، MGT311)\n"
+    "• اسأل عن موضوع محدد (ميدترم، فاينل، ملخص)\n"
+    "• مثال: <i>وش يجي بالميدترم IT362</i>"
+)
+_ERROR = "حدث خطأ، حاول مرة ثانية."
 
-_IDENTITY_TRIGGERS = {
-    "من انت", "من أنت", "مين انت", "مين أنت",
-    "ايش انت", "ايش أنت", "وش انت", "وش أنت",
-    "what are you", "who are you",
-}
-_GREETING_TRIGGERS = {
-    "مرحبا", "مرحبً", "مرحباً", "هلو", "هاي", "اهلين", "أهلين",
-    "اهلا", "أهلا", "اهلاً", "أهلاً", "كيف حالك", "كيف الحال",
-    "السلام عليكم", "وعليكم السلام", "صباح الخير", "مساء الخير",
-    "تصبح على خير", "hi", "hello", "hey", "hii", "helo",
-    "good morning", "good evening",
-}
-_ACK_TRIGGERS = {
-    "شكرا", "شكراً", "ثانكس", "ممتاز", "زين", "تمام", "thanks", "thank you",
-    "ok", "okay", "👍", "من انا", "من أنا", "مين انا", "مين أنا",
-    "ايش انا", "وش انا",
-}
-# Combined set for quick lookup (used in handle)
-_META_TRIGGERS = _IDENTITY_TRIGGERS | _GREETING_TRIGGERS | _ACK_TRIGGERS
+# ---------------------------------------------------------------------------
+# Assistant layer: LLM-based message classifier
+# ---------------------------------------------------------------------------
+
+_CLASSIFY_SYSTEM = """\
+Classify this student message for an Arabic university assistant (RUMMAN).
+Return EXACTLY ONE word from this list — nothing else:
+
+greeting     — hi/hello/مرحبا/اهلين/السلام عليكم/صباح الخير or similar
+identity_bot — who/what are you | من انت | وش انت | ايش انت
+identity_user — who am I | من انا | ما اسمي | من أنا
+capability   — can you do X | هل اقدر | هل عندك | وش تقدر | كيف تساعد | هل تستطيع
+meta         — comment on previous answer | هل متأكد | راجع | صح ولا غلط | مقتنع | وش مصدرك
+ack          — thanks/ok/تمام/شكرا/👍 or very short acknowledgement
+off_topic    — clearly unrelated to university/courses (weather, news, politics, jokes)
+academic     — anything about courses/exams/deadlines/study materials/university admin
+
+When in doubt choose: academic"""
+
+_CLASSIFY_CACHE: dict[str, str] = {}  # small in-memory cache for repeated queries
+
+
+async def _classify_message(text: str) -> str:
+    """
+    Returns one of: greeting, identity_bot, identity_user, capability,
+    meta, ack, off_topic, academic.
+    Falls back to 'academic' on any error (safe default for retrieval).
+    """
+    if not _ai:
+        return "academic"
+
+    key = text[:200].lower().strip()
+    if key in _CLASSIFY_CACHE:
+        return _CLASSIFY_CACHE[key]
+
+    try:
+        resp = await asyncio.wait_for(
+            _ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": _CLASSIFY_SYSTEM},
+                    {"role": "user",   "content": text[:300]},
+                ],
+                max_tokens=5,
+                temperature=0,
+            ),
+            timeout=4.0,
+        )
+        result = resp.choices[0].message.content.strip().lower().split()[0]
+        if result not in {
+            "greeting", "identity_bot", "identity_user",
+            "capability", "meta", "ack", "off_topic", "academic"
+        }:
+            result = "academic"
+    except Exception as exc:
+        log.debug("classify_failed | %s — defaulting to academic", exc)
+        result = "academic"
+
+    _CLASSIFY_CACHE[key] = result
+    return result
+
+
+def _has_academic_signal(text: str) -> bool:
+    """True if text obviously contains academic content — skip LLM classifier."""
+    if _COURSE_CODE_RE.search(text):
+        return True
+    tl = text.lower()
+    return any(kw in tl for kw in _ACADEMIC_KEYWORDS)
+
+
+def _clean(text: str) -> str:
+    """Normalize for trigger matching — lowercase, strip punctuation + whitespace."""
+    return text.lower().strip("؟?!.,،\t\n\r ")
+
+
+# ---------------------------------------------------------------------------
+# Session eviction
+# ---------------------------------------------------------------------------
+
+def _evict_expired_sessions() -> None:
+    now = time.monotonic()
+    expired = [k for k, (_, exp) in _SESSION_CACHE.items() if exp < now]
+    for k in expired:
+        del _SESSION_CACHE[k]
+    if len(_USER_CACHE) > _CACHE_MAX_ENTRIES:
+        evict_count = len(_USER_CACHE) // 5
+        for k in list(_USER_CACHE.keys())[:evict_count]:
+            del _USER_CACHE[k]
 
 
 # ---------------------------------------------------------------------------
@@ -145,7 +245,7 @@ async def _send(
 
 
 # ---------------------------------------------------------------------------
-# Platform identity helpers (fire-and-forget safe — return None on failure)
+# Platform identity helpers
 # ---------------------------------------------------------------------------
 
 def _hash_user(chat_id: int) -> str:
@@ -204,7 +304,7 @@ async def _get_or_create_session(
 
 
 # ---------------------------------------------------------------------------
-# Synthesize
+# Synthesize (retrieval + answer)
 # ---------------------------------------------------------------------------
 
 async def _synthesize(
@@ -242,7 +342,6 @@ async def _synthesize(
 
 def _format_synthesis(data: dict, query: str = "") -> str:
     if not data.get("grounded"):
-        # Try to give a more specific message if we can detect a course code
         course_match = _COURSE_CODE_RE.search(query)
         if course_match:
             code = course_match.group(1)
@@ -252,7 +351,6 @@ def _format_synthesis(data: dict, query: str = "") -> str:
             )
         return _NO_RESULTS
 
-    # Synthesis succeeded
     answer = (data.get("answer") or "").strip()
     if answer and not data.get("synthesis_failed"):
         sources = data.get("sources") or []
@@ -308,7 +406,6 @@ async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> Non
             except Exception as exc:
                 log.warning("feedback_post_failed | %s", exc)
 
-    # Always answer to stop the Telegram loading spinner
     await _tg(http, "answerCallbackQuery", callback_query_id=cq_id)
 
 
@@ -317,8 +414,6 @@ async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> Non
 # ---------------------------------------------------------------------------
 
 async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
-    """Save or display enrolled course codes."""
-    # Parse course codes from the command arguments
     parts = text.split(None, 1)
     args  = parts[1].strip() if len(parts) > 1 else ""
     codes = [m.upper() for m in _COURSE_CODE_RE.findall(args)]
@@ -349,7 +444,7 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
 
 
 # ---------------------------------------------------------------------------
-# Message handler
+# Message handler — two-layer routing
 # ---------------------------------------------------------------------------
 
 async def _handle(http: httpx.AsyncClient, message: dict) -> None:
@@ -359,6 +454,7 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     if not text:
         return
 
+    # ── Hard-coded commands ─────────────────────────────────────────────────
     if text.startswith("/start"):
         await _send(http, chat_id, _WELCOME)
         log.info("START | chat=%d", chat_id)
@@ -371,18 +467,106 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     if text.startswith("/"):
         return
 
-    normalized = text.lower().strip("؟?!. \t")
-    if normalized in _IDENTITY_TRIGGERS:
-        await _send(http, chat_id, _IDENTITY)
+    # ── Layer 1: Fast academic signal (skip classifier, go straight to retrieval) ─
+    if _has_academic_signal(text):
+        await _handle_academic(http, chat_id, text)
         return
-    if normalized in _GREETING_TRIGGERS:
+
+    # ── Layer 2: LLM classifier for everything else ─────────────────────────
+    category = await _classify_message(text)
+    log.info("CLASSIFIED | chat=%d | cat=%s | q=%.60s", chat_id, category, text)
+
+    if category == "greeting":
         await _send(http, chat_id, _WELCOME)
         return
-    if normalized in _ACK_TRIGGERS:
+
+    if category == "identity_bot":
+        await _send(http, chat_id, _IDENTITY)
+        return
+
+    if category == "identity_user":
+        await _send(http, chat_id, _USER_IDENTITY)
+        return
+
+    if category == "capability":
+        await _send(http, chat_id, _CAPABILITY)
+        return
+
+    if category == "ack":
         await _send(http, chat_id, "على الرحب! اسألني عن أي مادة أو اختبار.")
         return
 
-    # If query has no course code but student has enrolled courses, inject them as context
+    if category == "meta":
+        # Respond to meta-questions about previous answers conversationally
+        history = list(_HISTORY_CACHE.get(chat_id, []))
+        if history:
+            await _handle_meta(http, chat_id, text, history)
+        else:
+            await _send(http, chat_id,
+                "ما عندي جواب سابق في هذه المحادثة أقيّمه.\n"
+                "اسألني عن مادة أو موضوع وأجاوبك."
+            )
+        return
+
+    if category == "off_topic":
+        await _send(http, chat_id,
+            "أنا متخصص في مساعدة طلاب SEU الأكاديميين.\n\n"
+            "اسألني عن مادة، اختبار، أو أي شيء يخص دراستك."
+        )
+        return
+
+    # Default: academic retrieval
+    await _handle_academic(http, chat_id, text)
+
+
+async def _handle_meta(
+    http: httpx.AsyncClient,
+    chat_id: int,
+    text: str,
+    history: list[dict],
+) -> None:
+    """Generate a conversational response to meta-questions (confidence, correction, etc.)."""
+    if not _ai:
+        await _send(http, chat_id,
+            "إجاباتي مبنية على المصادر المتاحة في قاعدة البيانات فقط.\n"
+            "إذا لاحظت خطأ، حاول تسألني بطريقة مختلفة أو اذكر رمز المادة."
+        )
+        return
+
+    _META_SYSTEM = (
+        "أنت رمّان، مساعد أكاديمي لطلاب SEU. "
+        "الطالب يعلّق على جوابك السابق أو يسأل عن ثقتك فيه. "
+        "رد بصدق وإيجاز بالعربية الخليجية. "
+        "إذا سأل هل أنت متأكد: اشرح أن إجاباتك مبنية على مصادر محددة وقد تكون ناقصة. "
+        "لا تتذرع، لا تعتذر بشكل مبالغ. جملتان أو ثلاث كافية."
+    )
+    messages = [{"role": "system", "content": _META_SYSTEM}]
+    for turn in history[-4:]:
+        messages.append(turn)
+    messages.append({"role": "user", "content": text})
+
+    try:
+        resp = await asyncio.wait_for(
+            _ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=messages,
+                max_tokens=150,
+                temperature=0.3,
+            ),
+            timeout=8.0,
+        )
+        reply = resp.choices[0].message.content.strip()
+        await _send(http, chat_id, reply)
+    except Exception as exc:
+        log.warning("meta_reply_failed | %s", exc)
+        await _send(http, chat_id,
+            "إجاباتي مبنية على المصادر المتاحة فقط — قد تكون ناقصة.\n"
+            "إذا لاحظت خطأ، اسألني بطريقة مختلفة."
+        )
+
+
+async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
+    """Full retrieval + synthesis pipeline for academic queries."""
     query = text
     if not _COURSE_CODE_RE.search(text) and chat_id in _ENROLLED and _ENROLLED[chat_id]:
         enrolled_str = " ".join(_ENROLLED[chat_id])
@@ -391,12 +575,9 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     log.info("QUERY | chat=%d | q=%.60s", chat_id, query)
     await _typing(http, chat_id)
 
-    # Resolve identity (non-blocking on failure)
     user_id    = await _get_or_create_user(http, chat_id)
     session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
-
-    # Retrieve conversation history for this chat
-    history = list(_HISTORY_CACHE[chat_id]) if chat_id in _HISTORY_CACHE else None
+    history    = list(_HISTORY_CACHE[chat_id]) if chat_id in _HISTORY_CACHE else None
 
     data = await _synthesize(http, query, user_id, session_id, history)
     if data is None:
@@ -406,18 +587,15 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     reply    = _format_synthesis(data, query=text)
     grounded = data.get("grounded", False)
 
-    # Store this turn in history cache
     if grounded:
         q = _HISTORY_CACHE.setdefault(chat_id, deque(maxlen=_HISTORY_MAX_TURNS))
         q.append({"role": "user",      "content": text})
         q.append({"role": "assistant", "content": (data.get("answer") or "")[:400]})
 
-    # Append one-time course nudge for students who haven't registered courses
     if grounded and chat_id not in _PROMPTED_FOR_COURSES and chat_id not in _ENROLLED:
         _PROMPTED_FOR_COURSES.add(chat_id)
         reply = reply + _COURSE_NUDGE
 
-    # Attach feedback buttons only when results were returned
     markup = _feedback_keyboard(session_id) if grounded and session_id else None
     await _send(http, chat_id, reply, reply_markup=markup)
 
@@ -431,7 +609,7 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
 # ---------------------------------------------------------------------------
 
 async def main() -> None:
-    log.info("BOT_START | polling Telegram")
+    log.info("BOT_START | polling Telegram | assistant_layer=%s", "enabled" if _ai else "disabled")
     offset: int | None = None
     _tasks: set[asyncio.Task] = set()
 
@@ -469,10 +647,9 @@ async def main() -> None:
                         t.add_done_callback(_tasks.discard)
 
             except asyncio.CancelledError:
-                log.info("BOT_STOP")
                 break
             except Exception as exc:
-                log.warning("POLL_ERROR | %s", exc)
+                log.error("POLL_ERROR | %s", exc)
                 await asyncio.sleep(5)
 
 

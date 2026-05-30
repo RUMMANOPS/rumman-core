@@ -13,7 +13,7 @@ Search pipeline (POST /search):
 
 Synthesis pipeline (POST /synthesize):
   Same as /search steps 1–6, then:
-  8. Grounded synthesis     (gpt-4o-mini, corpus-only constraint, ~$0.0005)
+  8. Grounded synthesis     (gpt-4o by default, corpus-only constraint, ~$0.003)
   9. Synthesis event log    (records token usage for cost observability)
 
   The synthesis prompt forbids GPT from using training knowledge about SEU.
@@ -142,10 +142,11 @@ class SearchRequest(BaseModel):
 
 
 class SynthesizeRequest(BaseModel):
-    query:      str
-    limit:      int        = Field(default=5, ge=1, le=20)
-    session_id: str | None = None
-    user_id:    str | None = None
+    query:                str
+    limit:                int             = Field(default=5, ge=1, le=20)
+    session_id:           str | None      = None
+    user_id:              str | None      = None
+    conversation_history: list[dict] | None = None  # [{"role": "user"|"assistant", "content": str}]
 
 
 class UserIdentifyRequest(BaseModel):
@@ -521,9 +522,17 @@ async def _run_retrieval(
 # Grounded synthesis
 # ---------------------------------------------------------------------------
 
-async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
+_SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL", "gpt-4o")
+
+
+async def _synthesize_answer(
+    query: str,
+    chunks: list[dict],
+    conversation_history: list[dict] | None = None,
+) -> tuple[str, int]:
     """
-    Call gpt-4o-mini to synthesize a grounded answer from chunks.
+    Synthesize a grounded answer from chunks.
+    conversation_history: alternating user/assistant turns from the current session (last 3).
     Returns (answer_text, total_tokens_used).
     Raises asyncio.TimeoutError on timeout — caller handles fallback.
     """
@@ -542,17 +551,28 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
         f"{_tier_label(row)} [{i+1}] {(row.get('content') or '').strip()[:800]}"
         for i, row in enumerate(chunks[:8])
     )
+
+    messages: list[dict] = [{"role": "system", "content": _SYNTHESIS_SYSTEM}]
+
+    # Inject last N turns so the model can resolve pronouns and follow-up questions.
+    # Truncate each turn to 400 chars to keep context cost bounded.
+    if conversation_history:
+        for turn in conversation_history[-6:]:  # max 3 user+assistant pairs
+            role    = turn.get("role", "user")
+            content = (turn.get("content") or "")[:400]
+            if role in ("user", "assistant") and content:
+                messages.append({"role": role, "content": content})
+
+    messages.append({"role": "user", "content": _SYNTHESIS_USER.format(
+        query=query, chunks=chunk_text
+    )})
+
     resp = await asyncio.wait_for(
         ai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "system", "content": _SYNTHESIS_SYSTEM},
-                {"role": "user",   "content": _SYNTHESIS_USER.format(
-                    query=query, chunks=chunk_text
-                )},
-            ],
+            model=_SYNTHESIS_MODEL,
+            messages=messages,
             temperature=0.1,
-            max_tokens=600,
+            max_tokens=700,
         ),
         timeout=_SYNTHESIS_TIMEOUT,
     )
@@ -819,9 +839,10 @@ async def search(req: SearchRequest):
 @app.post("/synthesize")
 async def synthesize(req: SynthesizeRequest):
     """
-    Retrieve relevant chunks, then synthesize a grounded answer via gpt-4o-mini.
+    Retrieve relevant chunks, then synthesize a grounded answer via gpt-4o (default).
     The synthesis prompt hard-constrains GPT to only use retrieved chunk content.
     Falls back to returning raw chunks if synthesis times out or fails.
+    Supports conversation_history for multi-turn follow-up queries.
     """
     t_start = time.monotonic()
 
@@ -837,7 +858,9 @@ async def synthesize(req: SynthesizeRequest):
 
     if grounded:
         try:
-            answer, synthesis_tokens = await _synthesize_answer(req.query, results)
+            answer, synthesis_tokens = await _synthesize_answer(
+                req.query, results, req.conversation_history
+            )
         except asyncio.TimeoutError:
             log.warning("synthesis_timeout | query=%.60s", req.query)
             synthesis_failed = True

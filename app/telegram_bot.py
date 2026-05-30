@@ -21,6 +21,7 @@ import asyncio
 import hashlib
 import logging
 import time
+from collections import deque
 import httpx
 from dotenv import load_dotenv
 
@@ -42,6 +43,8 @@ _CACHE_MAX_ENTRIES = 50_000   # evict oldest 20% when exceeded
 _USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id (no TTL — user IDs are stable)
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
 _ENROLLED:      dict[int, list[str]]         = {}  # chat_id → enrolled course codes
+_HISTORY_MAX_TURNS = 6  # 3 user + 3 assistant messages
+_HISTORY_CACHE: dict[int, deque] = {}  # chat_id → deque of {"role", "content"}
 
 _COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
 
@@ -202,6 +205,7 @@ async def _synthesize(
     query: str,
     user_id: str | None,
     session_id: str | None,
+    conversation_history: list[dict] | None = None,
 ) -> dict | None:
     try:
         payload: dict = {"query": query, "limit": 5}
@@ -209,6 +213,8 @@ async def _synthesize(
             payload["user_id"] = user_id
         if session_id:
             payload["session_id"] = session_id
+        if conversation_history:
+            payload["conversation_history"] = conversation_history
         r = await http.post(
             f"{SEARCH_API_URL}/synthesize",
             json=payload,
@@ -382,13 +388,22 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     user_id    = await _get_or_create_user(http, chat_id)
     session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
 
-    data = await _synthesize(http, query, user_id, session_id)
+    # Retrieve conversation history for this chat
+    history = list(_HISTORY_CACHE[chat_id]) if chat_id in _HISTORY_CACHE else None
+
+    data = await _synthesize(http, query, user_id, session_id, history)
     if data is None:
         await _send(http, chat_id, _ERROR)
         return
 
     reply    = _format_synthesis(data, query=text)
     grounded = data.get("grounded", False)
+
+    # Store this turn in history cache
+    if grounded:
+        q = _HISTORY_CACHE.setdefault(chat_id, deque(maxlen=_HISTORY_MAX_TURNS))
+        q.append({"role": "user",      "content": text})
+        q.append({"role": "assistant", "content": (data.get("answer") or "")[:400]})
 
     # Attach feedback buttons only when results were returned
     markup = _feedback_keyboard(session_id) if grounded and session_id else None

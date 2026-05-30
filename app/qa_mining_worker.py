@@ -308,7 +308,7 @@ def _format_window(messages: list[dict]) -> str:
     lines = []
     for i, m in enumerate(messages):
         sender = m.get("sender_name") or "—"
-        text   = (m.get("message_text") or "").strip()
+        text   = (m.get("message_text") or "").strip().replace("\x00", "")
         d      = str(m.get("message_date") or "")[:10]
         lines.append(f"[{i}] {sender} ({d}): {text}")
     return "\n".join(lines)
@@ -355,13 +355,15 @@ async def embed_and_insert_pair(
     source_message_ids: list[str],
     dry_run: bool,
 ) -> bool:
-    question = (pair.get("question") or "").strip()
-    answer   = (pair.get("answer") or "").strip()
+    question = (pair.get("question") or "").strip().replace("\x00", "")
+    answer   = (pair.get("answer") or "").strip().replace("\x00", "")
     if not question or not answer:
         return False
 
     course_code = pair.get("course_code")
     content     = f"سؤال: {question}\nجواب: {answer}" if _is_arabic(question) else f"Q: {question}\nA: {answer}"
+    # PostgreSQL TEXT columns reject null bytes from Telegram message content
+    content = content.replace("\x00", "")
 
     if len(content) > _MAX_EMBED_CHARS:
         content = content[:_MAX_EMBED_CHARS]

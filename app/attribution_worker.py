@@ -183,12 +183,16 @@ async def main():
         max_tokens=MAX_TOKENS_PER_RUN)
 
     async with httpx.AsyncClient(timeout=30) as http:
+        from app.heartbeat import Heartbeat
+        hb = Heartbeat(http, worker_id="attribution_worker", process="attribution", interval_s=60)
+
         while True:
             try:
                 chunks = await fetch_unattributed(http)
 
                 if not chunks:
                     log("IDLE", msg="no unattributed chunks remaining")
+                    await hb.beat(status="idle")
                     await asyncio.sleep(SLEEP_SECONDS)
                     continue
 
@@ -234,9 +238,14 @@ async def main():
 
                 log("BATCH_DONE", attributed=attributed, unattributable=unattributed,
                     tokens_used=tokens_used)
+                await hb.beat(
+                    status="running",
+                    metadata={"attributed": attributed, "unattributable": unattributed, "tokens": tokens_used},
+                )
 
             except Exception as exc:
                 log("WORKER_ERROR", error=str(exc)[:200])
+                await hb.beat(status="error", metadata={"error": str(exc)[:200]})
 
             await asyncio.sleep(SLEEP_SECONDS)
 

@@ -295,16 +295,21 @@ async def main():
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     async with httpx.AsyncClient(timeout=120) as http:
+        from app.heartbeat import Heartbeat
+        hb = Heartbeat(http, worker_id="embed_worker", process="embed", interval_s=30)
+
         while True:
             jobs = await get_jobs(http)
 
             if not jobs:
+                await hb.beat(status="idle")
                 await asyncio.sleep(SLEEP_SECONDS)
                 continue
 
             log("JOBS_FETCHED", count=len(jobs))
             for job in jobs:
                 await process_job(ai, http, job)
+            await hb.beat(status="running", metadata={"jobs_this_batch": len(jobs)})
 
 
 if __name__ == "__main__":

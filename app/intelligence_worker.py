@@ -182,6 +182,9 @@ async def main():
     log("INTELLIGENCE_WORKER_START", batch_size=BATCH_SIZE, max_tokens=MAX_TOKENS_PER_RUN)
 
     async with httpx.AsyncClient(timeout=60) as http:
+        from app.heartbeat import Heartbeat
+        hb = Heartbeat(http, worker_id="intelligence_worker", process="intelligence", interval_s=60)
+
         while True:
             try:
                 cursor = await get_cursor(http)
@@ -189,6 +192,7 @@ async def main():
 
                 if not messages:
                     log("IDLE", cursor=cursor or "none")
+                    await hb.beat(status="idle", metadata={"cursor": (cursor or "")[:8]})
                     await asyncio.sleep(SLEEP_SECONDS)
                     continue
 
@@ -230,9 +234,14 @@ async def main():
                     await save_cursor(http, last_id)
                     log("BATCH_DONE", processed=len(messages), saved=items_saved,
                         duplicate=items_duplicate, tokens=tokens_used, cursor=last_id)
+                    await hb.beat(
+                        status="running",
+                        metadata={"processed": len(messages), "saved": items_saved, "tokens": tokens_used},
+                    )
 
             except Exception as exc:
                 log("WORKER_ERROR", error=str(exc))
+                await hb.beat(status="error", metadata={"error": str(exc)[:200]})
 
             await asyncio.sleep(SLEEP_SECONDS)
 

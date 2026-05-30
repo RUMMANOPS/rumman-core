@@ -87,6 +87,29 @@
       ],
       "bias_intent": "prerequisite_check",
       "bias_source_type": null
+    },
+    {
+      "id": "exam_format",
+      "triggers": [
+        "حضوري", "اونلاين", "عن بعد", "أونلاين",
+        "عبر الإنترنت", "remote", "online", "in-person",
+        "حضورية", "إلكتروني", "الكتروني",
+        "بلاك بورد", "منصة"
+      ],
+      "bias_intent": "exam_schedule",
+      "bias_source_type": null
+    },
+    {
+      "id": "registration_deadline",
+      "triggers": [
+        "معادلة", "تعديل خطة", "سحب مادة", "إضافة مادة",
+        "فتح التسجيل", "قفل التسجيل", "التسجيل مفتوح",
+        "آخر يوم للتسجيل", "آخر موعد للسحب",
+        "حذف مادة", "إضافة وسحب",
+        "registration", "add drop", "withdrawal"
+      ],
+      "bias_intent": "deadline",
+      "bias_source_type": null
     }
   ]
 }

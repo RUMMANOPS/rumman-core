@@ -143,7 +143,9 @@ async def get_jobs(http: httpx.AsyncClient) -> list[dict]:
             "order": "created_at.asc",
         },
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        log("GET_JOBS_ERROR", status=r.status_code, error=r.text[:120])
+        return []
     return r.json()
 
 
@@ -299,17 +301,21 @@ async def main():
         hb = Heartbeat(http, worker_id="embed_worker", process="embed", interval_s=30)
 
         while True:
-            jobs = await get_jobs(http)
+            try:
+                jobs = await get_jobs(http)
 
-            if not jobs:
-                await hb.beat(status="idle")
+                if not jobs:
+                    await hb.beat(status="idle")
+                    await asyncio.sleep(SLEEP_SECONDS)
+                    continue
+
+                log("JOBS_FETCHED", count=len(jobs))
+                for job in jobs:
+                    await process_job(ai, http, job)
+                await hb.beat(status="running", metadata={"jobs_this_batch": len(jobs)})
+            except Exception as exc:
+                log("WORKER_LOOP_ERROR", error=str(exc)[:200])
                 await asyncio.sleep(SLEEP_SECONDS)
-                continue
-
-            log("JOBS_FETCHED", count=len(jobs))
-            for job in jobs:
-                await process_job(ai, http, job)
-            await hb.beat(status="running", metadata={"jobs_this_batch": len(jobs)})
 
 
 if __name__ == "__main__":

@@ -16,6 +16,7 @@ Not in Procfile — run on demand.
 import os
 import asyncio
 import re
+import unicodedata
 
 from typing import Optional
 
@@ -38,8 +39,11 @@ EMBED_DIMS = 1536
 PARAGRAPH_CHUNK_TOKENS = 500
 PARAGRAPH_OVERLAP_TOKENS = 50
 
-# text-embedding-3-large hard limit is 8192 tokens; ~4 chars/token on average
-_MAX_EMBED_CHARS = 8000 * 4
+# text-embedding-3-large hard limit is 8192 tokens.
+# Arabic presentation forms (common in PDFs) tokenize at ~1 char/token, not 4.
+# After NFKC normalization standard Arabic averages ~2 chars/token.
+# 8000 tokens * 2 chars/token = 16000 — safe ceiling for mixed AR/EN content.
+_MAX_EMBED_CHARS = 16_000
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -52,6 +56,13 @@ HEADERS = {
 def log(event: str, **kwargs):
     parts = [event] + [f"{k}={v}" for k, v in kwargs.items()]
     print(" | ".join(parts), flush=True)
+
+
+def normalize_text(text: str) -> str:
+    """NFKC-normalize to collapse Arabic presentation forms (FB50–FDFF, FE70–FEFF)
+    into standard Unicode code points. This drastically reduces token count for
+    Arabic PDFs extracted by PyMuPDF, which often stores ligature forms verbatim."""
+    return unicodedata.normalize("NFKC", text)
 
 
 def chunk_exam_text(text: str) -> list[str]:
@@ -249,6 +260,7 @@ async def process_job(ai: AsyncOpenAI, http: httpx.AsyncClient, job: dict):
         if not extracted_text or not extracted_text.strip():
             raise RuntimeError("source_document has no extracted_text — run pdf_extract first")
 
+        extracted_text = normalize_text(extracted_text)
         source_type = doc["source_type"]
         chunks = chunk_text(extracted_text, source_type)
 

@@ -28,9 +28,21 @@ HEADERS = {
 # college_id lookup: populated at startup from inst_colleges.telegram_chat_ids
 _COLLEGE_BY_CHAT: dict[str, str] = {}
 
-# backfill registry: platform_chat_ids that already have a telegram_backfill_jobs row
-# prevents creating duplicate jobs on every new message from known chats
+# backfill registry: normalised bare channel IDs that already have a backfill job.
+# Stored as normalised positive-integer strings to prevent -100-prefix duplicates.
 _BACKFILL_REGISTERED: set[str] = set()
+
+
+def _norm_chat_id(chat_id: str | int) -> str:
+    """Normalise a Telegram chat ID to a bare positive integer string.
+    Strips the -100 MTProto prefix from full channel IDs so that
+    1929233838 and -1001929233838 map to the same key."""
+    n = int(chat_id)
+    if n < 0:
+        s = str(abs(n))
+        if s.startswith("100") and len(s) > 4:
+            return s[3:]
+    return str(abs(n))
 
 
 async def load_college_chat_map(http: httpx.AsyncClient) -> None:
@@ -49,7 +61,7 @@ async def load_college_chat_map(http: httpx.AsyncClient) -> None:
 
 
 async def load_backfill_registry(http: httpx.AsyncClient) -> None:
-    """Load all platform_chat_ids that already have backfill jobs into the in-memory registry."""
+    """Load normalised chat IDs for all existing backfill jobs into the in-memory registry."""
     r = await http.get(
         f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
         headers=HEADERS,
@@ -59,7 +71,10 @@ async def load_backfill_registry(http: httpx.AsyncClient) -> None:
         print(f"BACKFILL_REGISTRY_LOAD_ERROR | status={r.status_code}", flush=True)
         return
     for row in r.json():
-        _BACKFILL_REGISTERED.add(row["platform_chat_id"])
+        try:
+            _BACKFILL_REGISTERED.add(_norm_chat_id(row["platform_chat_id"]))
+        except (ValueError, TypeError):
+            pass
     print(f"BACKFILL_REGISTRY_LOADED | known_chats={len(_BACKFILL_REGISTERED)}", flush=True)
 
 
@@ -69,8 +84,13 @@ async def ensure_backfill_job(
     chat_name: str,
     chat_type: str,
 ) -> None:
-    """Create a pending backfill job for this chat if one doesn't already exist."""
-    if platform_chat_id in _BACKFILL_REGISTERED:
+    """Create a pending backfill job for this chat if one doesn't already exist.
+    Uses normalised IDs so -100XXXXXXXXXX and XXXXXXXXXX don't generate duplicate jobs."""
+    try:
+        norm = _norm_chat_id(platform_chat_id)
+    except (ValueError, TypeError):
+        return
+    if norm in _BACKFILL_REGISTERED:
         return
     r = await http.post(
         f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
@@ -85,10 +105,10 @@ async def ensure_backfill_job(
         },
     )
     if r.status_code in (200, 201):
-        _BACKFILL_REGISTERED.add(platform_chat_id)
+        _BACKFILL_REGISTERED.add(norm)
         print(f"BACKFILL_AUTO_CREATED | chat={chat_name} | id={platform_chat_id}", flush=True)
     elif r.status_code == 409:
-        _BACKFILL_REGISTERED.add(platform_chat_id)  # exists, register it
+        _BACKFILL_REGISTERED.add(norm)
     else:
         print(f"BACKFILL_CREATE_ERROR | chat={chat_name} | status={r.status_code}", flush=True)
 
@@ -119,7 +139,12 @@ async def discover_and_register_groups(client: TelegramClient, http: httpx.Async
         else:
             chat_type = "group"
 
-        if chat_id in _BACKFILL_REGISTERED:
+        try:
+            norm = _norm_chat_id(chat_id)
+        except (ValueError, TypeError):
+            continue
+
+        if norm in _BACKFILL_REGISTERED:
             count_known += 1
             continue
 

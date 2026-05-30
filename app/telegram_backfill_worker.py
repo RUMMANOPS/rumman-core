@@ -24,6 +24,31 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
+# Dedicated session prevents AUTH_KEY_DUPLICATED with the live listener.
+# Generate with: python3 auth_session.py (use personal number, not RUMMAN number)
+# Set TELEGRAM_BACKFILL_SESSION_STRING on Railway backfill service.
+# Falls back to TELEGRAM_SESSION_STRING if not set (may conflict with listener).
+_BACKFILL_SESSION = (
+    os.environ.get("TELEGRAM_BACKFILL_SESSION_STRING")
+    or os.environ["TELEGRAM_SESSION_STRING"]
+)
+if not os.environ.get("TELEGRAM_BACKFILL_SESSION_STRING"):
+    print(
+        "WARN_SESSION_SHARED | TELEGRAM_BACKFILL_SESSION_STRING not set — "
+        "sharing session with listener may cause AUTH_KEY_DUPLICATED. "
+        "Run auth_session.py with personal number and set the env var.",
+        flush=True,
+    )
+
+
+def _channel_id(chat_id: int) -> int:
+    """Strip Telegram's full MTProto channel ID (-100XXXXXXXXXX) to bare channel id."""
+    if chat_id < 0:
+        s = str(abs(chat_id))
+        if s.startswith("100") and len(s) > 4:
+            return int(s[3:])
+    return abs(chat_id)
+
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -382,13 +407,13 @@ async def maybe_spawn_media_job(http: httpx.AsyncClient, msg, mt: str, fm: dict,
 
 
 async def resolve_entity(client: TelegramClient, chat_id: int, chat_type: str):
-    """Resolve a Telegram entity using the correct peer type.
-    IDs stored without the -100 prefix must be resolved as PeerChannel,
-    not PeerUser, or Telethon will fail to find the entity."""
+    """Resolve a Telegram entity.
+    Channels/supergroups: strip the -100 MTProto prefix before calling PeerChannel —
+    PeerChannel requires a positive bare channel id."""
     if chat_type in ("channel", "megagroup"):
-        return await client.get_entity(PeerChannel(chat_id))
+        return await client.get_entity(PeerChannel(_channel_id(chat_id)))
     if chat_type == "group":
-        return await client.get_entity(PeerChat(chat_id))
+        return await client.get_entity(PeerChat(abs(chat_id)))
     return await client.get_entity(chat_id)
 
 
@@ -511,13 +536,85 @@ def _is_disconnect(e: Exception) -> bool:
     return "disconnect" in s or "connection" in s or "not connected" in s
 
 
+async def discover_missing_jobs(http: httpx.AsyncClient) -> int:
+    """
+    Scan telegram_sync_state for chats the live listener has seen but that have no
+    backfill job yet. Creates pending jobs so the worker picks them up automatically.
+    Returns the number of jobs created.
+    """
+    # All chats the listener has tracked
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
+        headers=HEADERS,
+        params={"select": "platform_chat_id,chat_name,chat_type", "limit": "1000"},
+    )
+    if r.status_code >= 400:
+        print(f"DISCOVER_SYNC_READ_ERROR | {r.status_code}", flush=True)
+        return 0
+    sync_chats = r.json()
+
+    # All existing backfill job chat IDs (normalised to bare positive form)
+    r2 = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
+        headers=HEADERS,
+        params={"select": "platform_chat_id", "limit": "5000"},
+    )
+    if r2.status_code >= 400:
+        print(f"DISCOVER_JOBS_READ_ERROR | {r2.status_code}", flush=True)
+        return 0
+
+    existing_norm: set[str] = set()
+    for row in r2.json():
+        try:
+            existing_norm.add(str(_channel_id(int(row["platform_chat_id"]))))
+        except (ValueError, TypeError):
+            pass
+
+    created = 0
+    for chat in sync_chats:
+        try:
+            norm = str(_channel_id(int(chat["platform_chat_id"])))
+        except (ValueError, TypeError):
+            continue
+        if norm in existing_norm:
+            continue
+        r3 = await http.post(
+            f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
+            headers=HEADERS,
+            json={
+                "platform_chat_id": chat["platform_chat_id"],
+                "chat_name": chat.get("chat_name") or "",
+                "chat_type": chat.get("chat_type") or "unknown",
+                "status": "pending",
+                "batch_size": 500,
+                "retry_count": 0,
+            },
+        )
+        if r3.status_code in (200, 201):
+            existing_norm.add(norm)
+            created += 1
+            print(
+                f"MISSING_JOB_CREATED | chat={chat.get('chat_name')} | id={chat['platform_chat_id']}",
+                flush=True,
+            )
+        elif r3.status_code == 409:
+            existing_norm.add(norm)  # race — already exists
+
+    print(f"DISCOVER_DONE | created={created} | total_sync_chats={len(sync_chats)}", flush=True)
+    return created
+
+
 async def main():
-    print("TELEGRAM BACKFILL WORKER STARTING", flush=True)
+    print(f"TELEGRAM BACKFILL WORKER STARTING | session={'dedicated' if os.environ.get('TELEGRAM_BACKFILL_SESSION_STRING') else 'shared_warn'}", flush=True)
 
     async with httpx.AsyncClient(timeout=120) as http:
+        # At startup: create backfill jobs for any chats the listener has seen
+        # but that don't have a job yet (e.g. new groups joined while worker was off).
+        await discover_missing_jobs(http)
+
         while True:
             client = TelegramClient(
-                StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
+                StringSession(_BACKFILL_SESSION),
                 int(os.environ["TELEGRAM_API_ID"]),
                 os.environ["TELEGRAM_API_HASH"],
             )

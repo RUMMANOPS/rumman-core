@@ -65,6 +65,28 @@
       ],
       "bias_intent": "exam_schedule",
       "bias_source_type": null
+    },
+    {
+      "id": "concept_explain",
+      "triggers": [
+        "اشرح", "شرح", "تعريف", "مفهوم",
+        "نظرية", "اشرح لي", "فسّر", "فسر",
+        "explain", "define", "what is", "definition",
+        "concept", "theory"
+      ],
+      "bias_intent": "concept_explain",
+      "bias_source_type": null
+    },
+    {
+      "id": "prerequisite_check",
+      "triggers": [
+        "قبل ما اسجل", "قبل التسجيل",
+        "مستوى", "المستوى المطلوب",
+        "وش أحتاج", "ايش أحتاج",
+        "prerequisites", "pre-req", "prereq"
+      ],
+      "bias_intent": "prerequisite_check",
+      "bias_source_type": null
     }
   ]
 }

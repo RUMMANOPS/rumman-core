@@ -43,8 +43,10 @@ PARAGRAPH_OVERLAP_TOKENS = 50
 # text-embedding-3-large hard limit is 8192 tokens.
 # Arabic presentation forms (common in PDFs) tokenize at ~1 char/token, not 4.
 # After NFKC normalization standard Arabic averages ~2 chars/token.
-# 8000 tokens * 2 chars/token = 16000 — safe ceiling for mixed AR/EN content.
-_MAX_EMBED_CHARS = 16_000
+# BUT mojibake Arabic (encoding errors → Latin chars) tokenizes at ~2 tokens/char.
+# Conservative ceiling: 4000 chars ≈ 4000–8000 tokens depending on encoding quality.
+# embed_and_insert_chunks halves further on 400 context-length errors.
+_MAX_EMBED_CHARS = 6_000
 
 HEADERS = {
     "apikey": SUPABASE_KEY,
@@ -201,7 +203,20 @@ async def embed_and_insert_chunks(
         if len(chunk_text) > _MAX_EMBED_CHARS:
             log("CHUNK_TRUNCATED", doc=doc["id"], chunk=i, original=len(chunk_text), limit=_MAX_EMBED_CHARS)
             chunk_text = chunk_text[:_MAX_EMBED_CHARS]
-        resp = await ai.embeddings.create(model=EMBED_MODEL, input=chunk_text, dimensions=EMBED_DIMS)
+
+        # Retry with progressive truncation on context-length errors (mojibake text
+        # tokenizes at up to 2 tokens/char, blowing past the 8192 token hard limit).
+        embed_text = chunk_text
+        for attempt in range(3):
+            try:
+                resp = await ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS)
+                break
+            except Exception as e:
+                if "maximum context length" in str(e) and attempt < 2:
+                    embed_text = embed_text[:len(embed_text) // 2]
+                    log("CHUNK_HALVED", doc=doc["id"], chunk=i, new_len=len(embed_text), attempt=attempt + 1)
+                else:
+                    raise
         embedding = resp.data[0].embedding
 
         row = {

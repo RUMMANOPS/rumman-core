@@ -230,7 +230,7 @@ async def _synthesize(
 def _format_synthesis(data: dict, query: str = "") -> str:
     if not data.get("grounded"):
         # Try to give a more specific message if we can detect a course code
-        course_match = re.search(r'\b([A-Z]{2,4}\d{3})\b', query.upper())
+        course_match = _COURSE_CODE_RE.search(query)
         if course_match:
             code = course_match.group(1)
             return (

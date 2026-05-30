@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026-05-28",
+    "version": "2026-05-30",
     "description": "Gulf/Saudi academic student Arabic normalization dictionary. Phrases are applied before words (longest-match). Source tags: seed=bootstrapped, corpus=mined from RUMMAN messages, manual=human-added.",
     "apply_order": "phrases first (longest to shortest), then words"
   },
@@ -203,7 +203,6 @@
 
     "_comment_time": "--- time expressions ---",
     "الحين":      "الآن",
-    "الحين":      "الآن",
     "بكره":       "غداً",
     "بكرة":       "غداً",
     "قبل":        "قبل",
@@ -215,8 +214,6 @@
     "وااالله":    "",
     "يالله":      "",
     "يعني":       "أي",
-    "يعني":       "أي",
-    "بس":         "فقط",
     "بس":         "فقط",
     "لو سمحت":   "رجاءً",
     "لو تكرمت":  "رجاءً",

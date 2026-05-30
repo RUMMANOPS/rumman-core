@@ -111,7 +111,7 @@ Style:
 
 _SYNTHESIS_USER = "Student question: {query}\n\nSource chunks:\n{chunks}"
 
-_SYNTHESIS_TIMEOUT = 12.0  # seconds; on timeout, fall back to chunk display
+_SYNTHESIS_TIMEOUT = 20.0  # seconds; gpt-4o with conversation history needs more headroom
 
 
 # ---------------------------------------------------------------------------

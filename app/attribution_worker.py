@@ -10,12 +10,18 @@ All attributions remain machine_asserted until confirmed by downstream validatio
 False attribution (wrong course) is worse than no attribution — threshold is intentionally high.
 
 Enable: set ATTRIBUTION_WORKER_ENABLED=true in Railway environment.
+
+RPD budget: ATTRIBUTION_MAX_DAILY_CALLS (default 3000) caps gpt-4o-mini requests per
+UTC day, leaving room for search API synthesis and daily_brief runs.
 """
+from __future__ import annotations
 
 import os
+import re
 import json
 import asyncio
 import time
+from datetime import datetime, timezone, timedelta
 import httpx
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
@@ -28,10 +34,17 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 
 SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 MODEL         = "gpt-4o-mini"
-BATCH_SIZE    = int(os.getenv("ATTRIBUTION_BATCH_SIZE", "20"))
-SLEEP_SECONDS = int(os.getenv("ATTRIBUTION_SLEEP_SECONDS", "30"))
+BATCH_SIZE           = int(os.getenv("ATTRIBUTION_BATCH_SIZE", "20"))
+SLEEP_SECONDS        = int(os.getenv("ATTRIBUTION_SLEEP_SECONDS", "120"))
 CONFIDENCE_THRESHOLD = 0.85
 MAX_TOKENS_PER_RUN   = int(os.getenv("ATTRIBUTION_MAX_TOKENS_PER_RUN", "500_000"))
+# Hard cap on gpt-4o-mini RPD usage. OpenAI free tier: 10K/day shared with search API
+# and daily_brief. At 3K/day attribution worker finishes 11K remaining in ~4 days.
+MAX_DAILY_CALLS      = int(os.getenv("ATTRIBUTION_MAX_DAILY_CALLS", "3000"))
+
+# Regex-first: attribute chunks where a single SEU course code is explicit in the text.
+# Saves AI calls; pattern: 2-6 uppercase letters followed by exactly 3 digits.
+_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3})\b')
 
 _ENABLED = os.getenv("ATTRIBUTION_WORKER_ENABLED", "").strip().lower() == "true"
 
@@ -65,6 +78,20 @@ Confidence rules:
 def log(event: str, **kwargs):
     parts = [event] + [f"{k}={v}" for k, v in kwargs.items()]
     print(" | ".join(parts), flush=True)
+
+
+def regex_attribute(content: str) -> tuple[str | None, float]:
+    """Return (course_code, 1.0) if exactly one SEU code appears explicitly in the text."""
+    codes = list(set(_COURSE_CODE_RE.findall((content or "")[:1200])))
+    if len(codes) == 1:
+        return codes[0], 1.0
+    return None, 0.0
+
+
+def seconds_until_utc_midnight() -> int:
+    now = datetime.now(timezone.utc)
+    tomorrow = (now + timedelta(days=1)).replace(hour=0, minute=5, second=0, microsecond=0)
+    return max(60, int((tomorrow - now).total_seconds()))
 
 
 async def fetch_unattributed(http: httpx.AsyncClient) -> list[dict]:
@@ -180,7 +207,13 @@ async def main():
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
     log("ATTRIBUTION_WORKER_START", batch_size=BATCH_SIZE, threshold=CONFIDENCE_THRESHOLD,
-        max_tokens=MAX_TOKENS_PER_RUN)
+        max_tokens=MAX_TOKENS_PER_RUN, daily_call_cap=MAX_DAILY_CALLS)
+
+    # Per-day API call counter — resets at UTC midnight.
+    # Prevents the attribution worker from exhausting the shared gpt-4o-mini RPD
+    # that is also used by search_api synthesis and daily_brief.
+    daily_calls = 0
+    daily_calls_day: str | None = None
 
     async with httpx.AsyncClient(timeout=30) as http:
         from app.heartbeat import Heartbeat
@@ -188,6 +221,22 @@ async def main():
 
         while True:
             try:
+                # Reset daily counter at UTC day boundary
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if daily_calls_day != today:
+                    daily_calls_day = today
+                    daily_calls = 0
+                    log("DAILY_COUNTER_RESET", date=today, limit=MAX_DAILY_CALLS)
+
+                if daily_calls >= MAX_DAILY_CALLS:
+                    wait = seconds_until_utc_midnight()
+                    log("DAILY_BUDGET_EXHAUSTED", calls=daily_calls,
+                        limit=MAX_DAILY_CALLS, sleep_s=wait)
+                    await hb.beat(status="budget_paused",
+                                  metadata={"daily_calls": daily_calls, "limit": MAX_DAILY_CALLS})
+                    await asyncio.sleep(wait)
+                    continue
+
                 chunks = await fetch_unattributed(http)
 
                 if not chunks:
@@ -198,26 +247,41 @@ async def main():
 
                 tokens_used  = 0
                 attributed   = 0
+                regex_attributed = 0
                 unattributed = 0
 
                 for chunk in chunks:
                     if tokens_used >= MAX_TOKENS_PER_RUN:
-                        log("BUDGET_REACHED", tokens_used=tokens_used, limit=MAX_TOKENS_PER_RUN)
+                        log("TOKEN_BUDGET_REACHED", tokens_used=tokens_used, limit=MAX_TOKENS_PER_RUN)
+                        break
+                    if daily_calls >= MAX_DAILY_CALLS:
+                        log("DAILY_BUDGET_REACHED", calls=daily_calls, limit=MAX_DAILY_CALLS)
                         break
 
                     chunk_id = chunk["id"]
-                    t0 = time.monotonic()
+                    content  = chunk.get("content") or ""
 
+                    # Regex-first: if exactly one course code is explicit in the text,
+                    # skip the AI call — same outcome, zero cost.
+                    regex_code, regex_conf = regex_attribute(content)
+                    if regex_code:
+                        await update_chunk(http, chunk_id, regex_code, regex_conf, None)
+                        log("ATTRIBUTED_REGEX", id=chunk_id[:8], course=regex_code)
+                        regex_attributed += 1
+                        continue
+
+                    t0 = time.monotonic()
                     try:
                         course_code, confidence, in_tok, out_tok = await classify_chunk(
-                            ai, chunk.get("content") or ""
+                            ai, content
                         )
                     except Exception as exc:
                         log("CLASSIFY_ERROR", id=chunk_id, error=str(exc)[:120])
                         continue
 
-                    tokens_used += in_tok + out_tok
-                    duration_ms  = int((time.monotonic() - t0) * 1000)
+                    daily_calls  += 1
+                    tokens_used  += in_tok + out_tok
+                    duration_ms   = int((time.monotonic() - t0) * 1000)
 
                     ai_run_id = await create_ai_run(
                         http, chunk_id, course_code, confidence,
@@ -236,11 +300,15 @@ async def main():
                             confidence=f"{confidence:.2f}", tokens=in_tok + out_tok)
                         unattributed += 1
 
-                log("BATCH_DONE", attributed=attributed, unattributable=unattributed,
-                    tokens_used=tokens_used)
+                log("BATCH_DONE", attributed_ai=attributed, attributed_regex=regex_attributed,
+                    unattributable=unattributed, tokens_used=tokens_used,
+                    daily_calls=daily_calls, daily_limit=MAX_DAILY_CALLS)
                 await hb.beat(
                     status="running",
-                    metadata={"attributed": attributed, "unattributable": unattributed, "tokens": tokens_used},
+                    metadata={"attributed": attributed + regex_attributed,
+                               "unattributable": unattributed,
+                               "tokens": tokens_used,
+                               "daily_calls": daily_calls},
                 )
 
             except Exception as exc:

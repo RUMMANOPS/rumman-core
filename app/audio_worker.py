@@ -164,33 +164,14 @@ async def process_job(client, http, job):
         await update_job(http, job_id, "failed", error=str(e), retry_count=new_retry_count)
 
 async def main():
-    print("AUDIO_WORKER_START", flush=True)
-
-    client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
-        int(os.environ["TELEGRAM_API_ID"]),
-        os.environ["TELEGRAM_API_HASH"]
+    # audio_transcribe jobs are handled by telegram_download_worker.py (unified media handler).
+    # Running this worker simultaneously would conflict on TELEGRAM_SESSION_STRING and race
+    # on the same job queue. Sleep indefinitely — the process must stay alive for Railway.
+    print(
+        "AUDIO_WORKER_STANDBY | audio_transcribe handled by telegram_download_worker.py | sleeping",
+        flush=True,
     )
-
-    await asyncio.wait_for(client.connect(), timeout=30)
-
-    if not await client.is_user_authorized():
-        print("SESSION_NOT_AUTHORIZED", flush=True)
-        return
-
-    me = await client.get_me()
-    print(f"AUDIO_WORKER_READY | user_id={me.id} | max_retries={MAX_RETRIES}", flush=True)
-
-    async with httpx.AsyncClient(timeout=60) as http:
-        while True:
-            jobs = await get_jobs(http)
-
-            if not jobs:
-                await asyncio.sleep(3)
-                continue
-
-            print(f"JOBS_FETCHED | count={len(jobs)}", flush=True)
-            for job in jobs:
-                await process_job(client, http, job)
+    while True:
+        await asyncio.sleep(86400)
 
 asyncio.run(main())

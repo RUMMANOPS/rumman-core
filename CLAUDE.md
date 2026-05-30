@@ -28,7 +28,7 @@ RUMMAN is an **Operational Intelligence OS**, not a chatbot. The system has two 
 
 Both layers are required. The institutional layer provides ground truth. The community layer provides living intelligence. Together they enable grounded answers.
 
-Current phase per `docs/06-roadmap/roadmap.md`: **Phase 1 → transitioning to Phase 2**. The data spine is stable and the search/bot layer is live. The next major boundary is wiring the institutional layer into retrieval and enabling the intelligence pipeline.
+Current phase per `docs/06-roadmap/roadmap.md`: **Phase 2 (In Progress)**. The data spine, search layer, and bot are live. Core Phase 2 infrastructure is built (intelligence items, calendar injection, claim model, gap analyst, QA mining). Remaining: bulk-ingest 93 official SEU docs, populate college chat_id mapping, enable intelligence/attribution workers.
 
 `docs/` is the **source of truth** per ADR-0003. Before making architectural changes, read:
 1. `docs/philosophy/vocabulary.md` — precise definitions of load-bearing terms
@@ -97,7 +97,7 @@ Key tables:
 - `source_documents` — uploaded/ingested files awaiting or post-extraction.
 - `document_chunks` — vector-embedded chunks; the retrieval corpus.
 - `media_files` — audio transcription results.
-- `seu_colleges`, `seu_specializations`, `seu_courses` — SEU institutional layer (master data).
+- `inst_colleges`, `inst_specializations`, `inst_courses` — SEU institutional layer (master data; renamed from `seu_*` for multi-tenancy).
 - `tenants`, `users`, `sessions` — platform identity layer.
 - `analysis_runs` — append-only analyst output log (gap_analyst, qa_miner, etc.) — migration 026.
 - `gap_items` — normalised knowledge gap rows, one per cluster — migration 026.
@@ -148,12 +148,16 @@ Operational CLI tools in `scripts/`. All require `.env` with `SUPABASE_URL`, `SU
 | Script | Purpose |
 |---|---|
 | `ingest_document.py` | Ingest a local file into the knowledge pipeline (upload → pdf_extract job → embed_chunk job) |
-| `seed_courses.py` | Seed structured course data from `scripts/data/seu_courses.json` into `seu_courses` |
+| `batch_ingest_seu.py` | Bulk-ingest all 93 SEU knowledge repository documents in priority order |
+| `seed_courses.py` | Seed structured course data from `scripts/data/seu_courses.json` into `inst_courses` |
 | `create_backfill_jobs.py` | Create `telegram_backfill_jobs` rows for specified chat IDs |
 | `generate_seed_lexicon.py` | Generate normalization dictionary candidates from corpus — outputs to `data/seed_candidates_*.json` (gitignored) |
 | `review_candidates.py` | Interactive review of lexicon candidates before adding to `data/normalization_dict.json` |
 | `extract_concepts.py` | Extract academic concepts from document chunks for knowledge graph seeding |
 | `gap_analyst.py` | Cluster zero-result learning_events into knowledge gaps → `analysis_runs` + `gap_items` |
+| `backfill_course_codes.py` | Regex + LLM inference to fill null course_code on source_documents and their chunks |
+| `weekly_report.py` | Weekly ops + product health report (pipeline, query volume, corpus coverage) → Telegram ops channel |
+| `eval_bot_quality.py` | Before/after synthesis quality comparison for 10 representative test queries |
 
 ## Commands
 

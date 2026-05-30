@@ -423,7 +423,7 @@ async def handle_telegram_media(client: TelegramClient, ai: AsyncOpenAI,
 
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
-CONNECT_RETRY_SECONDS = 60  # wait before retrying after AuthKeyDuplicatedError
+CONNECT_RETRY_SECONDS = 180  # wait before retrying after AuthKeyDuplicatedError — 3 min gives Telegram time to release the auth key
 
 
 async def main():

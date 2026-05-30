@@ -183,7 +183,7 @@ async def main():
 
     async with httpx.AsyncClient(timeout=60) as http:
         try:
-            from app.heartbeat import Heartbeat
+            from heartbeat import Heartbeat
             hb = Heartbeat(http, worker_id="intelligence_worker", process="intelligence", interval_s=60)
         except Exception as e:
             log("HEARTBEAT_IMPORT_ERROR", error=str(e))

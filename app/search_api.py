@@ -101,7 +101,9 @@ Grounding rules:
 
 Style:
 - Gulf Arabic (خليجي) for Arabic questions. Clear, natural English for English questions.
-- Be direct, specific, and substantive. 150–250 words.
+- Answer like the smartest student in the class explaining to a friend — direct, specific, practical.
+- When you have enough material: give a complete, useful answer (150–300 words is normal; use what the question requires).
+- When [INTELLIGENCE] items contain deadlines or announcements: surface them prominently near the top.
 - Do NOT mention professor names or predict unreleased exam content.
 - Do NOT add meta-commentary ("Based on the sources...", "According to the chunks...").
 - Do NOT explain what you're doing — just answer.\
@@ -352,6 +354,7 @@ async def _retrieve_calendar_events(http: httpx.AsyncClient) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _INTELLIGENCE_ITEM_LABELS = {
+    # intelligence_items types (legacy)
     "exam":         "اختبار",
     "deadline":     "موعد تسليم",
     "assignment":   "واجب",
@@ -360,6 +363,10 @@ _INTELLIGENCE_ITEM_LABELS = {
     "decision":     "قرار",
     "reminder":     "تذكير",
     "meeting":      "اجتماع",
+    # extracted_items types (daily_brief)
+    "task":         "مهمة",
+    "risk":         "تحذير",
+    "follow_up":    "متابعة",
 }
 
 
@@ -369,18 +376,19 @@ async def _retrieve_intelligence_items(
     item_types: list[str] | None = None,
     days_back: int = 60,
 ) -> list[dict]:
-    """Query intelligence_items for recent community-sourced events.
+    """Query extracted_items (daily_brief output) for recent community-sourced events.
     Returns results in the same shape as match_documents rows."""
     from datetime import date, timedelta
     cutoff = (date.today() - timedelta(days=days_back)).isoformat()
 
     params: list[tuple] = [
-        ("tenant_id",   f"eq.{SEU_TENANT_ID}"),
-        ("created_at",  f"gte.{cutoff}"),
-        ("confidence",  "gte.0.70"),
-        ("select",      "item_type,title,description,due_date,course_code,confidence,metadata,created_at"),
-        ("order",       "due_date.asc.nullslast"),
-        ("limit",       "20"),
+        ("tenant_id",      f"eq.{SEU_TENANT_ID}"),
+        ("created_at",     f"gte.{cutoff}"),
+        ("confidence",     "gte.0.65"),
+        ("validity_status", "neq.rejected"),
+        ("select",         "item_type,content,due_date,course_code,confidence,chat_name,created_at"),
+        ("order",          "due_date.asc.nullslast"),
+        ("limit",          "20"),
     ]
     if course_codes:
         params.append(("course_code", f"in.({','.join(course_codes)})"))
@@ -388,7 +396,7 @@ async def _retrieve_intelligence_items(
         params.append(("item_type", f"in.({','.join(item_types)})"))
 
     r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/intelligence_items",
+        f"{SUPABASE_URL}/rest/v1/extracted_items",
         headers=HEADERS,
         params=params,
     )
@@ -397,16 +405,13 @@ async def _retrieve_intelligence_items(
 
     results = []
     for item in r.json():
-        label   = _INTELLIGENCE_ITEM_LABELS.get(item.get("item_type",""), item.get("item_type",""))
-        title   = item.get("title") or ""
-        desc    = item.get("description") or ""
+        label   = _INTELLIGENCE_ITEM_LABELS.get(item.get("item_type", ""), item.get("item_type", ""))
+        content = item.get("content") or ""
         due     = item.get("due_date")
         code    = item.get("course_code") or ""
-        chat    = (item.get("metadata") or {}).get("chat_name") or "مجموعة"
+        chat    = item.get("chat_name") or "مجموعة"
 
-        lines = [f"[{label}] {title}"]
-        if desc and desc != title:
-            lines.append(desc)
+        lines = [f"[{label}] {content}"]
         if due:
             lines.append(f"الموعد: {due}")
         if code:
@@ -419,8 +424,8 @@ async def _retrieve_intelligence_items(
             "source_type":      "telegram_export",
             "source_authority": "community",
             "authority_tier":   "community",
-            "similarity":       min(float(item.get("confidence", 0.7)), 0.88),
-            "metadata":         {"origin": "intelligence_items"},
+            "similarity":       min(float(item.get("confidence", 0.65)), 0.88),
+            "metadata":         {"origin": "extracted_items"},
         })
 
     return results
@@ -492,14 +497,13 @@ async def _run_retrieval(
             calendar = await _retrieve_calendar_events(http)
             all_raw.extend(calendar)
 
-        # Inject intelligence layer items (community Telegram signals)
-        # Trigger when: course codes detected OR temporal/exam/deadline intents
+        # Inject intelligence layer items (community Telegram signals from extracted_items)
+        # Trigger when: course codes detected OR temporal/operational intents
         intel_codes   = (understanding.intent.course_codes if understanding.intent else []) or []
         intel_intent  = understanding.intent.intent_type if understanding.intent else ""
-        intel_types   = None  # fetch all item types when course-specific
-        if intel_intent in ("exam_schedule", "deadline"):
-            intel_types = ["exam", "deadline", "quiz", "reminder"]
-        if intel_codes or intel_intent in ("exam_schedule", "deadline", "concept_explain"):
+        intel_types   = None  # fetch all item types; daily_brief items are already curated
+        if intel_codes or intel_intent in ("exam_schedule", "deadline", "concept_explain",
+                                           "task_question", "general_question"):
             intel = await _retrieve_intelligence_items(
                 http,
                 course_codes=intel_codes,
@@ -526,15 +530,15 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
         origin  = (row.get("metadata") or {}).get("origin", "")
         if origin == "academic_calendar":
             return "[CALENDAR]"
-        if origin == "intelligence_items":
+        if origin in ("intelligence_items", "extracted_items"):
             return "[INTELLIGENCE]"
         if tier == "official" or "inst_courses" in origin:
             return "[OFFICIAL]"
         return "[COMMUNITY]"
 
     chunk_text = "\n\n---\n\n".join(
-        f"{_tier_label(row)} [{i+1}] {(row.get('content') or '').strip()[:500]}"
-        for i, row in enumerate(chunks[:5])
+        f"{_tier_label(row)} [{i+1}] {(row.get('content') or '').strip()[:800]}"
+        for i, row in enumerate(chunks[:8])
     )
     resp = await asyncio.wait_for(
         ai.chat.completions.create(
@@ -546,7 +550,7 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
                 )},
             ],
             temperature=0.1,
-            max_tokens=350,
+            max_tokens=600,
         ),
         timeout=_SYNTHESIS_TIMEOUT,
     )

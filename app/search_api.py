@@ -498,17 +498,18 @@ async def _run_retrieval(
             all_raw.extend(calendar)
 
         # Inject intelligence layer items (community Telegram signals from extracted_items)
-        # Trigger when: course codes detected OR temporal/operational intents
-        intel_codes   = (understanding.intent.course_codes if understanding.intent else []) or []
-        intel_intent  = understanding.intent.intent_type if understanding.intent else ""
-        intel_types   = None  # fetch all item types; daily_brief items are already curated
-        if intel_codes or intel_intent in ("exam_schedule", "deadline", "concept_explain",
-                                           "task_question", "general_question"):
-            intel = await _retrieve_intelligence_items(
-                http,
-                course_codes=intel_codes,
-                item_types=intel_types,
-            )
+        # Two separate triggers to avoid flooding broad queries with unrelated items:
+        #   1. Course-specific: inject items for detected course codes (always)
+        #   2. Temporal/operational: inject ALL items when intent is exam/deadline (no course filter)
+        #      — covers "are finals online?", "when is the معادلة deadline?" without course codes
+        # General queries without course codes get NO injection (avoids context pollution).
+        intel_codes  = (understanding.intent.course_codes if understanding.intent else []) or []
+        intel_intent = understanding.intent.intent_type if understanding.intent else ""
+        if intel_codes:
+            intel = await _retrieve_intelligence_items(http, course_codes=intel_codes)
+            all_raw.extend(intel)
+        elif intel_intent in ("exam_schedule", "deadline"):
+            intel = await _retrieve_intelligence_items(http, course_codes=[])
             all_raw.extend(intel)
 
     results = _deduplicate(all_raw, limit)

@@ -37,32 +37,31 @@ The original Phase 1 goal was ingestion stabilization. The system evolved furthe
 - `scripts/ingest_document.py` — CLI to push official documents through the pipeline
 - `scripts/seed_courses.py` — seeds structured course data (names, descriptions, prerequisites)
 
-**Current state:** 5 colleges, 21 specializations, 157 courses fully mapped. Official document ingestion pipeline exists but has not yet been run on the repository (93 files pending).
+**Current state:** 5 colleges, 21 specializations, 161 courses seeded in `inst_courses` (renamed from `seu_*` tables for multi-tenancy). Official document ingestion pipeline (`batch_ingest_seu.py`) exists but has not yet been bulk-run on the repository (93 files pending).
 
 ---
 
 ## Phase 2: Institutional Intelligence
 
-Status: **Next**
+Status: **In Progress** *(core infrastructure live; official docs not yet ingested)*
 
 The transition from search-over-community-content to grounded institutional + community intelligence.
 
-### Goals
+### Already Completed (as of 2026-05-30)
 
-- Connect the institutional layer to retrieval: structured queries for course facts (credits, prerequisites, program requirements) bypass vector search and query `seu_*` tables directly
-- Populate `seu_courses.name_ar/name_en` from `scripts/data/seu_courses.json` (82 courses ready)
-- Ingest official university documents (93 files) through the pipeline with correct source metadata
-- Add `source_authority` to `document_chunks` to distinguish official institutional content from community uploads
-- Wire Telegram `chat_id` → college tagging at ingestion time (mapping already in `seu_colleges.telegram_chat_ids`)
-- Enable `intelligence_worker.py` for entity/task/deadline extraction (requires ADR update)
+- **Structured query path** — `search_api.py` queries `inst_courses` directly for course codes detected in queries, bypassing vector search (exact match, similarity=0.95)
+- **Academic calendar layer** — `search_api.py` injects calendar events for `exam_schedule`/`deadline` intents
+- **Intelligence layer** — `active_extracted_items` view feeds synthesis for course-specific and temporal queries
+- **Course data** — 161 courses seeded in `inst_courses` (renamed from `seu_*` for multi-tenancy)
+- **Claim model** — `valid_from/valid_until/superseded_by` on `document_chunks` and `extracted_items` (migration 025)
+- **Gap analyst** — `scripts/gap_analyst.py` clusters zero-result events into actionable gaps
+- **QA mining** — `app/qa_mining_worker.py` extracts implicit Q&A from 72K Telegram messages
 
-### Deliverables
+### Remaining
 
-- Structured query path in search API for curriculum facts
-- Official document corpus in `document_chunks` with authority metadata
-- College-tagged community chunks (free precision improvement)
-- Intelligence extraction running on a subset of Telegram streams
-- Course coverage analytics (which courses are well-covered vs. gaps)
+- **Official document corpus** — 93 files in university repository not yet bulk-ingested (`batch_ingest_seu.py` ready)
+- **Intelligence worker** — `intelligence_worker.py` in Procfile but gated behind `INTELLIGENCE_WORKER_ENABLED=true`
+- **College tagging** — Telegram `chat_id` → college mapping exists in `inst_colleges.telegram_chat_ids`; wiring complete in `rumman_engine.py` but mapping not yet populated in DB
 
 ---
 

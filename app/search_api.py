@@ -528,7 +528,7 @@ async def _synthesize_answer(query: str, chunks: list[dict]) -> tuple[str, int]:
             return "[CALENDAR]"
         if origin == "intelligence_items":
             return "[INTELLIGENCE]"
-        if tier == "official" or "inst_courses" in origin or "seu_courses" in origin:
+        if tier == "official" or "inst_courses" in origin:
             return "[OFFICIAL]"
         return "[COMMUNITY]"
 

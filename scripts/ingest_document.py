@@ -44,6 +44,9 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 STORAGE_BUCKET = "rumman-content"
 INSTITUTION = "SEU"
 
+SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+_OFFICIAL_SOURCE_TYPES = {"study_plan", "regulation", "course_description"}
+
 VALID_SOURCE_TYPES = ("exam", "study_plan", "regulation", "course_description", "telegram_export", "upload")
 VALID_EXAM_TYPES = ("final", "midterm", "quiz")
 VALID_SEMESTERS = ("first", "second", "summer")
@@ -85,11 +88,20 @@ async def upload_to_storage(http: httpx.AsyncClient, file_path: Path, storage_pa
         content=data,
     )
 
-    if r.status_code == 200:
+    if r.status_code in (200, 201):
         return True
     if r.status_code == 409:
         log("STORAGE_ALREADY_EXISTS", path=storage_path)
         return True
+    # Supabase Storage returns 400 with body {"statusCode":"409"} for duplicates
+    if r.status_code == 400:
+        try:
+            body = r.json()
+            if body.get("statusCode") == "409" or body.get("error") == "Duplicate":
+                log("STORAGE_ALREADY_EXISTS", path=storage_path)
+                return True
+        except Exception:
+            pass
 
     log("STORAGE_UPLOAD_ERROR", status=r.status_code, error=r.text[:200])
     return False
@@ -208,6 +220,8 @@ async def main():
             "professor": args.professor,
             "language": args.language,
             "processing_status": "pending",
+            "tenant_id": SEU_TENANT_ID,
+            "authority_tier": "official" if args.source_type in _OFFICIAL_SOURCE_TYPES else "community",
         }
 
         log("INSERTING_DOCUMENT")

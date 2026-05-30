@@ -43,8 +43,15 @@ _CACHE_MAX_ENTRIES = 50_000   # evict oldest 20% when exceeded
 _USER_CACHE:    dict[int, str]              = {}  # chat_id → user_id (no TTL — user IDs are stable)
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}  # chat_id → (session_id, expires_monotonic)
 _ENROLLED:      dict[int, list[str]]         = {}  # chat_id → enrolled course codes
+_PROMPTED_FOR_COURSES: set[int]              = set()  # chats that received the onboarding nudge
 _HISTORY_MAX_TURNS = 6  # 3 user + 3 assistant messages
 _HISTORY_CACHE: dict[int, deque] = {}  # chat_id → deque of {"role", "content"}
+
+_COURSE_NUDGE = (
+    "\n\n💡 <i>لتحسين إجاباتي لموادك تحديداً، أرسل:\n"
+    "<code>/mycourses IT362 CS251 MGT311</code>\n"
+    "وسأفيلتر النتائج حسب موادك.</i>"
+)
 
 _COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
 
@@ -404,6 +411,11 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         q = _HISTORY_CACHE.setdefault(chat_id, deque(maxlen=_HISTORY_MAX_TURNS))
         q.append({"role": "user",      "content": text})
         q.append({"role": "assistant", "content": (data.get("answer") or "")[:400]})
+
+    # Append one-time course nudge for students who haven't registered courses
+    if grounded and chat_id not in _PROMPTED_FOR_COURSES and chat_id not in _ENROLLED:
+        _PROMPTED_FOR_COURSES.add(chat_id)
+        reply = reply + _COURSE_NUDGE
 
     # Attach feedback buttons only when results were returned
     markup = _feedback_keyboard(session_id) if grounded and session_id else None

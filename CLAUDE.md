@@ -60,6 +60,7 @@ Deployed on Railway. `Procfile` defines **seven independent processes** — they
 | `app/daily_brief.py` | Generate structured daily briefs from Telegram streams | Requires intelligence layer; off until Phase 2 |
 | `app/pdf_worker.py` | Extract text from PDFs in Supabase Storage → `source_documents` | Run on demand when ingesting official documents |
 | `app/query_handler.py` | CLI + importable module: synthesize course intelligence from all layers | Development/debug tool; not a service |
+| `app/qa_mining_worker.py` | Extract Q&A pairs from 72K Telegram messages → embed → `document_chunks` | Run on demand; requires migration 026+027 |
 
 `auth_session.py` is a one-shot local helper to generate `TELEGRAM_SESSION_STRING` — gitignored, never runs on Railway.
 
@@ -90,6 +91,10 @@ Key tables:
 - `media_files` — audio transcription results.
 - `seu_colleges`, `seu_specializations`, `seu_courses` — SEU institutional layer (master data).
 - `tenants`, `users`, `sessions` — platform identity layer.
+- `analysis_runs` — append-only analyst output log (gap_analyst, qa_miner, etc.) — migration 026.
+- `gap_items` — normalised knowledge gap rows, one per cluster — migration 026.
+- `active_extracted_items` — view: extracted_items filtered by temporal validity + not rejected/superseded — migration 025.
+- `active_document_chunks` — view: document_chunks filtered by superseded_by — migration 025.
 
 ADR-0004: every operational object must **eventually** carry `tenant_id`. New tables should include it from the start.
 
@@ -140,6 +145,7 @@ Operational CLI tools in `scripts/`. All require `.env` with `SUPABASE_URL`, `SU
 | `generate_seed_lexicon.py` | Generate normalization dictionary candidates from corpus — outputs to `data/seed_candidates_*.json` (gitignored) |
 | `review_candidates.py` | Interactive review of lexicon candidates before adding to `data/normalization_dict.json` |
 | `extract_concepts.py` | Extract academic concepts from document chunks for knowledge graph seeding |
+| `gap_analyst.py` | Cluster zero-result learning_events into knowledge gaps → `analysis_runs` + `gap_items` |
 
 ## Commands
 

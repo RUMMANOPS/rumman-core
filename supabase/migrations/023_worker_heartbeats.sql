@@ -1,18 +1,17 @@
--- Migration 023: worker_heartbeats table
+-- Migration 023: worker_heartbeats — no-op note
 --
--- Each Railway worker writes a heartbeat row (upsert) every N seconds.
--- Ops can query this table to determine worker liveness and detect stalls.
--- A worker absent for > 2× its beat_interval_seconds should be investigated.
+-- worker_heartbeats was already created by migration 016_temporal_and_ops.sql
+-- with this schema (columns: worker_id, service_name, tenant_id, last_seen_at,
+-- jobs_processed, jobs_failed, last_job_id, status, metadata).
+--
+-- app/heartbeat.py writes to this existing schema.
+-- The CREATE TABLE IF NOT EXISTS below was a no-op on apply.
 
 CREATE TABLE IF NOT EXISTS worker_heartbeats (
-    worker_id         TEXT        PRIMARY KEY,
-    process           TEXT        NOT NULL,          -- 'embed', 'attribution', 'intelligence', etc.
-    status            TEXT        NOT NULL DEFAULT 'running',  -- 'running' | 'idle' | 'error'
-    last_beat_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    beat_interval_s   INT         NOT NULL DEFAULT 30,
-    metadata          JSONB,                         -- last batch stats, error info, etc.
-    created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    worker_id     TEXT PRIMARY KEY,
+    service_name  TEXT NOT NULL,
+    tenant_id     UUID,
+    last_seen_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status        TEXT NOT NULL DEFAULT 'running',
+    metadata      JSONB NOT NULL DEFAULT '{}'
 );
-
-COMMENT ON TABLE worker_heartbeats IS
-    'Live liveness table — each active worker upserts a row every beat_interval_s seconds.';

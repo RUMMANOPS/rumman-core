@@ -322,7 +322,7 @@ async def main():
         log("HTTP_CLIENT_READY")
 
         try:
-            from app.heartbeat import Heartbeat
+            from heartbeat import Heartbeat
             hb = Heartbeat(http, worker_id="embed_worker", process="embed", interval_s=30)
             log("HEARTBEAT_READY")
         except Exception as e:

@@ -216,7 +216,7 @@ async def main():
     daily_calls_day: str | None = None
 
     async with httpx.AsyncClient(timeout=30) as http:
-        from app.heartbeat import Heartbeat
+        from heartbeat import Heartbeat
         hb = Heartbeat(http, worker_id="attribution_worker", process="attribution", interval_s=60)
 
         while True:

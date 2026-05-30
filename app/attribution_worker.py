@@ -75,7 +75,6 @@ async def fetch_unattributed(http: httpx.AsyncClient) -> list[dict]:
             "attribution_status": "eq.original",
             "course_code":        "is.null",
             "embedding":          "not.is.null",
-            "tenant_id":          f"eq.{SEU_TENANT_ID}",
             "select":             "id,content,source_type,authority_tier",
             "order":              "id.asc",
             "limit":              str(BATCH_SIZE),
@@ -156,6 +155,7 @@ async def update_chunk(
         "attribution_status":     "machine_asserted",
         "attribution_confidence": confidence,
         "attribution_ai_run_id":  ai_run_id,
+        "tenant_id":              SEU_TENANT_ID,
     }
     if course_code:
         patch["course_code"] = course_code

@@ -128,6 +128,50 @@ _NO_RESULTS = (
 _ERROR = "حدث خطأ، حاول مرة ثانية."
 
 # ---------------------------------------------------------------------------
+# Quick-start inline keyboard (shown with /start)
+# ---------------------------------------------------------------------------
+
+_QUICK_START_KEYBOARD = {
+    "inline_keyboard": [
+        [
+            {"text": "🗂 تجميعات اختبار",  "callback_data": "qs:exam"},
+            {"text": "📝 ملخص مادة",       "callback_data": "qs:summary"},
+        ],
+        [
+            {"text": "📅 مواعيد / تسليم",  "callback_data": "qs:deadline"},
+            {"text": "📋 خطة دراسية",      "callback_data": "qs:plan"},
+        ],
+    ]
+}
+
+_QS_HINTS: dict[str, str] = {
+    "exam": (
+        "📝 لتجميعات الاختبارات، أرسل:\n\n"
+        "<code>تجميعات [رمز المادة]</code>\n\n"
+        "مثال: <code>تجميعات IT362</code>\n"
+        "أو: <code>أسئلة فاينل MGT311</code>"
+    ),
+    "summary": (
+        "📚 لملخص مادة، أرسل:\n\n"
+        "<code>ملخص [رمز المادة]</code>\n\n"
+        "مثال: <code>ملخص CS251</code>\n"
+        "أو: <code>شرح مقرر IT362</code>"
+    ),
+    "deadline": (
+        "📅 لمواعيد التسليم والاختبارات، أرسل:\n\n"
+        "<code>مواعيد [رمز المادة]</code>\n\n"
+        "مثال: <code>مواعيد اختبار MGT311</code>\n"
+        "أو: <code>موعد تسليم CS341</code>"
+    ),
+    "plan": (
+        "🎓 للخطة الدراسية، أرسل:\n\n"
+        "<code>خطة دراسية [التخصص]</code>\n\n"
+        "مثال: <code>خطة تقنية المعلومات</code>\n"
+        "أو: <code>متطلبات BSCS</code>"
+    ),
+}
+
+# ---------------------------------------------------------------------------
 # Assistant layer: LLM-based message classifier
 # ---------------------------------------------------------------------------
 
@@ -388,8 +432,17 @@ def _feedback_keyboard(session_id: str) -> dict:
 # ---------------------------------------------------------------------------
 
 async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> None:
-    cq_id = callback_query["id"]
-    data  = callback_query.get("data", "")
+    cq_id   = callback_query["id"]
+    data    = callback_query.get("data", "")
+    chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+
+    if data.startswith("qs:") and chat_id:
+        qs_type = data[3:]
+        hint = _QS_HINTS.get(qs_type, "اسألني أي سؤال أكاديمي.")
+        await _send(http, chat_id, hint)
+        await _tg(http, "answerCallbackQuery", callback_query_id=cq_id)
+        log.info("QUICK_START | chat=%d | type=%s", chat_id, qs_type)
+        return
 
     if data.startswith("fb:"):
         parts = data.split(":", 2)
@@ -456,7 +509,7 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
 
     # ── Hard-coded commands ─────────────────────────────────────────────────
     if text.startswith("/start"):
-        await _send(http, chat_id, _WELCOME)
+        await _send(http, chat_id, _WELCOME, reply_markup=_QUICK_START_KEYBOARD)
         log.info("START | chat=%d", chat_id)
         return
 

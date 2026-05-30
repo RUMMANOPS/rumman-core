@@ -116,11 +116,11 @@ async def ensure_backfill_job(
 async def discover_and_register_groups(client: TelegramClient, http: httpx.AsyncClient) -> None:
     """
     Enumerate all Telegram dialogs the collector account is in and create pending
-    backfill jobs for any group not already tracked. Called once at startup.
+    backfill jobs for any group not already tracked. Called at startup and periodically.
 
     This ensures that groups joined while the listener was offline are automatically
-    queued for historical ingestion on next restart. Does NOT fetch messages (not
-    a historical crawl — only enumerates the dialog list).
+    queued for historical ingestion. Does NOT fetch messages (not a historical crawl —
+    only enumerates the dialog list).
     """
     count_new = 0
     count_known = 0
@@ -155,6 +155,20 @@ async def discover_and_register_groups(client: TelegramClient, http: httpx.Async
         f"GROUP_DISCOVERY_DONE | new_jobs={count_new} | already_known={count_known}",
         flush=True,
     )
+
+
+_DISCOVERY_INTERVAL = 6 * 3600  # 6 hours
+
+
+async def _periodic_discovery_loop(client: TelegramClient, http: httpx.AsyncClient) -> None:
+    """Re-scan all dialogs every 6 hours — detects groups joined while listener was running."""
+    while True:
+        await asyncio.sleep(_DISCOVERY_INTERVAL)
+        try:
+            print("PERIODIC_DISCOVERY_START", flush=True)
+            await discover_and_register_groups(client, http)
+        except Exception as e:
+            print(f"PERIODIC_DISCOVERY_ERROR | {e}", flush=True)
 
 
 def message_type(msg):
@@ -304,6 +318,10 @@ async def build_payload(msg, chat_name, chat_type, chat_id, source):
             "size_bytes": fm["size_bytes"],
             "is_forward": bool(getattr(msg, "fwd_from", None)),
             "college_id": _COLLEGE_BY_CHAT.get(str(chat_id)),
+            # True for official channel broadcasts — highest-trust community signal
+            "is_channel_post": bool(getattr(msg, "post", False)),
+            # True when sender is a bot — lower-trust signal
+            "sender_is_bot": bool(getattr(sender, "bot", False)) if sender else False,
         },
     }
 
@@ -350,6 +368,7 @@ async def main():
             await load_backfill_registry(http)
             await load_college_chat_map(http)
             await discover_and_register_groups(client, http)
+            asyncio.create_task(_periodic_discovery_loop(client, http))
 
             @client.on(events.NewMessage)
             async def new_message_handler(event):

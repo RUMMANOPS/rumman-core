@@ -339,61 +339,68 @@ async def main():
         os.environ["TELEGRAM_API_HASH"],
     )
 
-    await client.start()
+    try:
+        await client.start()
 
-    me = await client.get_me()
+        me = await client.get_me()
 
-    print(f"LOGGED_IN: {me.id}")
+        print(f"LOGGED_IN: {me.id}")
 
-    async with httpx.AsyncClient(timeout=30) as http:
-        await load_backfill_registry(http)
-        await load_college_chat_map(http)
-        await discover_and_register_groups(client, http)
+        async with httpx.AsyncClient(timeout=30) as http:
+            await load_backfill_registry(http)
+            await load_college_chat_map(http)
+            await discover_and_register_groups(client, http)
 
-        @client.on(events.NewMessage)
-        async def new_message_handler(event):
-            try:
-                chat = await event.get_chat()
+            @client.on(events.NewMessage)
+            async def new_message_handler(event):
+                try:
+                    chat = await event.get_chat()
 
-                chat_name = (
-                    getattr(chat, "title", None)
-                    or getattr(chat, "first_name", None)
-                    or "Unknown"
-                )
+                    chat_name = (
+                        getattr(chat, "title", None)
+                        or getattr(chat, "first_name", None)
+                        or "Unknown"
+                    )
 
-                chat_type = (
-                    "private"
-                    if event.is_private
-                    else "channel"
-                    if event.is_channel
-                    else "group"
-                )
+                    chat_type = (
+                        "private"
+                        if event.is_private
+                        else "channel"
+                        if event.is_channel
+                        else "group"
+                    )
 
-                await process_message(
-                    http=http,
-                    msg=event.message,
-                    chat_name=chat_name,
-                    chat_type=chat_type,
-                    chat_id=event.chat_id,
-                    source="live",
-                )
+                    await process_message(
+                        http=http,
+                        msg=event.message,
+                        chat_name=chat_name,
+                        chat_type=chat_type,
+                        chat_id=event.chat_id,
+                        source="live",
+                    )
 
-            except Exception as e:
-                print("LIVE_ERROR", str(e))
+                except Exception as e:
+                    print("LIVE_ERROR", str(e))
 
-        if ENABLE_BACKFILL:
-            await historical_backfill(client)
-        else:
-            print("\nHISTORICAL BACKFILL DISABLED\n")
+            if ENABLE_BACKFILL:
+                await historical_backfill(client)
+            else:
+                print("\nHISTORICAL BACKFILL DISABLED\n")
 
-        print("\nLIVE LISTENER ACTIVE\n")
+            print("\nLIVE LISTENER ACTIVE\n")
 
-        await client.run_until_disconnected()
+            await client.run_until_disconnected()
+    finally:
+        # Ensure the auth key is released on Telegram's side before any retry.
+        try:
+            await client.disconnect()
+        except Exception:
+            pass
 
 
 async def _run_with_retry():
     """Outer retry loop: handles AuthKeyDuplicatedError from rolling restarts."""
-    RETRY_DELAY = 90  # seconds — long enough for the old container to fully exit
+    RETRY_DELAY = 180  # seconds — 3 min gives Telegram time to release the auth key
     while True:
         try:
             await main()

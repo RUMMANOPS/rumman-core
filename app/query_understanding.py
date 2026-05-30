@@ -330,17 +330,21 @@ def build_search_params(
     # prevent other courses' content bleeding in at higher similarity).
     # Run both Arabic and English queries — corpus may be in either language.
     if course_code:
+        # Drop source_type filter when we already have a course filter: the course
+        # constraint is tight enough, and applying source_type too often produces
+        # zero results (e.g. "ابغى ملخص MGT425" → source_type=upload, but upload
+        # chunks contain textbook slides, not summaries → sim < 0.25 → no results).
         searches = [SearchParams(
             query=intent_query,
             course_code=course_code,
-            source_type=source_type,
+            source_type=None,
             limit=limit,
         )]
         if intent.english_query and intent.english_query != intent_query:
             searches.append(SearchParams(
                 query=intent.english_query,
                 course_code=course_code,
-                source_type=source_type,
+                source_type=None,
                 limit=limit,
             ))
         return searches

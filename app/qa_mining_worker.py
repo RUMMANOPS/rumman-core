@@ -135,25 +135,37 @@ async def fetch_chat_names(http: httpx.AsyncClient, filter_chat: Optional[str]) 
     if filter_chat:
         return [filter_chat]
 
-    r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/messages",
-        headers=HEADERS,
-        params=[
-            ("select", "chat_name"),
-            ("message_type", "eq.text"),
-            ("order", "chat_name.asc"),
-            ("limit", "1000"),
-        ],
-    )
-    if r.status_code >= 400:
-        log("FETCH_CHATS_ERROR", status=r.status_code)
-        return []
-
     seen: set[str] = set()
-    for row in r.json():
-        name = row.get("chat_name")
-        if name and name not in seen:
-            seen.add(name)
+
+    # Primary: telegram_backfill_jobs has all known chats (one job per chat).
+    # This covers all 86 channels including those only reached via backfill,
+    # not just the small subset tracked in telegram_sync_state.
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_backfill_jobs",
+        headers=HEADERS,
+        params=[("select", "chat_name"), ("limit", "5000")],
+    )
+    if r.status_code < 400:
+        for row in r.json():
+            name = row.get("chat_name")
+            if name:
+                seen.add(name)
+
+    # Fallback: telegram_sync_state for chats the live listener has seen
+    # but may not have a backfill job.
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
+        headers=HEADERS,
+        params=[("select", "chat_name"), ("limit", "5000")],
+    )
+    if r.status_code < 400:
+        for row in r.json():
+            name = row.get("chat_name")
+            if name:
+                seen.add(name)
+
+    if not seen:
+        log("FETCH_CHATS_ERROR", msg="no chats found in backfill_jobs or sync_state")
     return sorted(seen)
 
 

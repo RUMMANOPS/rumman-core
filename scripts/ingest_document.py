@@ -156,10 +156,20 @@ async def main():
     file_name = file_path.name
     mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
 
+    # Supabase storage requires ASCII-safe keys — strip non-ASCII, collapse spaces.
+    import re as _re
+    def _safe_key(s: str) -> str:
+        ext = Path(s).suffix
+        stem = Path(s).stem
+        stem_safe = _re.sub(r'[^\x00-\x7F]+', '', stem)   # strip non-ASCII
+        stem_safe = _re.sub(r'[^A-Za-z0-9._-]+', '_', stem_safe).strip('_') or "file"
+        return stem_safe + ext
+
+    safe_file_name = _safe_key(file_name)
     folder = f"{args.institution}/{args.source_type}"
     if args.course_code:
         folder += f"/{args.course_code}"
-    storage_path = f"{folder}/{content_hash[:8]}_{file_name}"
+    storage_path = f"{folder}/{content_hash[:8]}_{safe_file_name}"
 
     log(
         "INGEST_PLAN",

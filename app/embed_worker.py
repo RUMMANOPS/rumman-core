@@ -294,27 +294,46 @@ async def process_job(ai: AsyncOpenAI, http: httpx.AsyncClient, job: dict):
 
 
 async def main():
-    log("EMBED_WORKER_START", model=EMBED_MODEL, dims=EMBED_DIMS, max_retries=MAX_RETRIES)
+    import sys
+    log("EMBED_WORKER_START", model=EMBED_MODEL, dims=EMBED_DIMS, max_retries=MAX_RETRIES,
+        python=sys.version.split()[0],
+        supabase_url=SUPABASE_URL[:40],
+        openai_key_set=bool(OPENAI_API_KEY))
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    log("OPENAI_CLIENT_READY")
 
     async with httpx.AsyncClient(timeout=120) as http:
-        from app.heartbeat import Heartbeat
-        hb = Heartbeat(http, worker_id="embed_worker", process="embed", interval_s=30)
+        log("HTTP_CLIENT_READY")
 
+        try:
+            from app.heartbeat import Heartbeat
+            hb = Heartbeat(http, worker_id="embed_worker", process="embed", interval_s=30)
+            log("HEARTBEAT_READY")
+        except Exception as e:
+            log("HEARTBEAT_IMPORT_ERROR", error=str(e))
+            hb = None
+
+        loop_count = 0
         while True:
             try:
                 jobs = await get_jobs(http)
 
                 if not jobs:
-                    await hb.beat(status="idle")
+                    if hb:
+                        await hb.beat(status="idle")
+                    if loop_count == 0:
+                        log("EMBED_WORKER_IDLE", hint="no pending embed_chunk jobs")
+                    loop_count += 1
                     await asyncio.sleep(SLEEP_SECONDS)
                     continue
 
+                loop_count = 0
                 log("JOBS_FETCHED", count=len(jobs))
                 for job in jobs:
                     await process_job(ai, http, job)
-                await hb.beat(status="running", metadata={"jobs_this_batch": len(jobs)})
+                if hb:
+                    await hb.beat(status="running", metadata={"jobs_this_batch": len(jobs)})
             except Exception as exc:
                 log("WORKER_LOOP_ERROR", error=str(exc)[:200])
                 await asyncio.sleep(SLEEP_SECONDS)

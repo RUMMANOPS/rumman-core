@@ -16,6 +16,8 @@ Requires:
     - SUPABASE_URL, SUPABASE_KEY env vars (plus OPENAI_API_KEY for --embed)
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json
@@ -44,7 +46,7 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
-DATA_FILE = Path(__file__).parent / "data" / "inst_courses.json"
+DATA_FILE = Path(__file__).parent / "data" / "seu_courses.json"
 
 
 def log(event: str, **kwargs):

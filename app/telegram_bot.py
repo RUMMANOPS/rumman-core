@@ -86,12 +86,25 @@ _IDENTITY = (
     "اسألني عن أي مادة — أسئلة الاختبار، المحتوى، المتطلبات، أو أي شيء تحتاجه."
 )
 
-_META_TRIGGERS = {
+_IDENTITY_TRIGGERS = {
     "من انت", "من أنت", "مين انت", "مين أنت",
     "ايش انت", "ايش أنت", "وش انت", "وش أنت",
     "what are you", "who are you",
-    "مرحبا", "مرحبً", "هلو", "هاي", "hi", "hello", "السلام عليكم",
 }
+_GREETING_TRIGGERS = {
+    "مرحبا", "مرحبً", "مرحباً", "هلو", "هاي", "اهلين", "أهلين",
+    "اهلا", "أهلا", "اهلاً", "أهلاً", "كيف حالك", "كيف الحال",
+    "السلام عليكم", "وعليكم السلام", "صباح الخير", "مساء الخير",
+    "تصبح على خير", "hi", "hello", "hey", "hii", "helo",
+    "good morning", "good evening",
+}
+_ACK_TRIGGERS = {
+    "شكرا", "شكراً", "ثانكس", "ممتاز", "زين", "تمام", "thanks", "thank you",
+    "ok", "okay", "👍", "من انا", "من أنا", "مين انا", "مين أنا",
+    "ايش انا", "وش انا",
+}
+# Combined set for quick lookup (used in handle)
+_META_TRIGGERS = _IDENTITY_TRIGGERS | _GREETING_TRIGGERS | _ACK_TRIGGERS
 
 
 # ---------------------------------------------------------------------------
@@ -345,8 +358,15 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     if text.startswith("/"):
         return
 
-    if text.lower().strip("؟?!.") in _META_TRIGGERS:
+    normalized = text.lower().strip("؟?!. \t")
+    if normalized in _IDENTITY_TRIGGERS:
         await _send(http, chat_id, _IDENTITY)
+        return
+    if normalized in _GREETING_TRIGGERS:
+        await _send(http, chat_id, _WELCOME)
+        return
+    if normalized in _ACK_TRIGGERS:
+        await _send(http, chat_id, "على الرحب! اسألني عن أي مادة أو اختبار.")
         return
 
     # If query has no course code but student has enrolled courses, inject them as context

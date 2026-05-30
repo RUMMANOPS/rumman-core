@@ -35,7 +35,7 @@ SEU_TENANT_ID = os.environ.get("SEU_TENANT_ID", "00000000-0000-0000-0000-0000000
 
 WORKER = "daily_brief_v1"
 PROMPT_VERSION = "v1"
-MODEL = "gpt-4o-mini"
+MODEL = os.environ.get("DAILY_BRIEF_MODEL", "gpt-4o-mini")
 CONFIDENCE_THRESHOLD = 0.65
 MIN_MESSAGES_PER_CHAT = 2
 

@@ -107,7 +107,9 @@ async def get_pending_jobs(http: httpx.AsyncClient) -> list[dict]:
             "order":       "created_at.asc",
         },
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        log("GET_JOBS_ERROR", status=r.status_code, error=r.text[:120])
+        return []
     return r.json()
 
 

@@ -64,9 +64,10 @@ EMBED_DIMS    = 1536
 _SUBJECT_MAP: dict[str, str] = {
     "IT": "it", "CS": "it", "CIS": "it", "MIS": "it", "SE": "it",
     "MGT": "management", "BUS": "management", "HRM": "management",
-    "FIN": "finance", "ACC": "finance", "ECO": "finance",
-    "ENG": "engineering", "MATH": "engineering", "PHYS": "engineering", "STAT": "engineering",
-    "ARA": "general", "ENG": "general", "GEN": "general",
+    "FIN": "finance", "ACC": "finance", "ACCT": "finance", "ECO": "finance",
+    "MATH": "engineering", "PHYS": "engineering", "STAT": "engineering",
+    "ENGT": "engineering", "CET": "engineering",
+    "ARA": "general", "ENG": "general", "GEN": "general", "TRA": "general",
 }
 
 

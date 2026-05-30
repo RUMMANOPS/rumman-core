@@ -36,7 +36,9 @@ async def get_jobs(http):
             "order": "created_at.asc",
         }
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        print(f"GET_JOBS_ERROR | status={r.status_code} | error={r.text[:120]}", flush=True)
+        return []
     return r.json()
 
 async def update_job(http, job_id, status, result=None, error=None, retry_count=None):
@@ -87,8 +89,7 @@ async def transcribe(file_path):
             )
 
             if r.status_code >= 400:
-                print("OPENAI_TRANSCRIBE_ERROR_BODY", r.text)
-            r.raise_for_status()
+                raise RuntimeError(f"OpenAI transcribe error {r.status_code}: {r.text[:200]}")
             return r.json().get("text", "")
 
 async def process_job(client, http, job):

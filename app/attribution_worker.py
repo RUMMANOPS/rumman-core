@@ -122,6 +122,7 @@ async def create_ai_run(
         headers=HEADERS,
         json={
             "tenant_id":      SEU_TENANT_ID,
+            "run_type":       "course_attribution",
             "worker":         "attribution_worker",
             "model":          MODEL,
             "prompt_version": "1.0",

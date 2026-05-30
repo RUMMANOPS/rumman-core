@@ -5,12 +5,12 @@ embed_worker.py — Text chunking and embedding worker.
 Polls processing_jobs for job_type='embed_chunk'. For each job:
   1. Reads extracted_text from source_documents.
   2. Chunks the text (question-aware for exams, paragraph-aware for everything else).
-  3. Calls OpenAI text-embedding-3-large (3072 dims) for each chunk.
+  3. Calls OpenAI text-embedding-3-large (1536 dims) for each chunk.
   4. Inserts chunks into document_chunks with embeddings.
   5. Updates source_documents processing_status='chunked'.
 
 Requires: supabase/migrations/003_knowledge_layer.sql applied.
-Not in Procfile — run on demand.
+Runs as the 'embed' process in the Railway Procfile.
 """
 
 import os
@@ -200,6 +200,7 @@ async def embed_and_insert_chunks(
     inserted = 0
 
     for i, chunk_text in enumerate(chunks):
+        chunk_text = chunk_text.replace("\x00", "")  # PostgreSQL TEXT rejects null bytes
         if len(chunk_text) > _MAX_EMBED_CHARS:
             log("CHUNK_TRUNCATED", doc=doc["id"], chunk=i, original=len(chunk_text), limit=_MAX_EMBED_CHARS)
             chunk_text = chunk_text[:_MAX_EMBED_CHARS]

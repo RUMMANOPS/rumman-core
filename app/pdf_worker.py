@@ -57,7 +57,9 @@ async def get_jobs(http: httpx.AsyncClient) -> list[dict]:
             "order": "created_at.asc",
         },
     )
-    r.raise_for_status()
+    if r.status_code >= 400:
+        log("GET_JOBS_ERROR", status=r.status_code, error=r.text[:120])
+        return []
     return r.json()
 
 
@@ -145,7 +147,7 @@ def extract_text_from_pdf(file_path: str) -> tuple[str, int, str, float]:
 
     doc.close()
 
-    full_text = "\n\n".join(pages_text)
+    full_text = "\n\n".join(pages_text).replace("\x00", "")  # PostgreSQL TEXT rejects null bytes
 
     if image_only_pages == 0:
         method = "digital"
@@ -287,15 +289,19 @@ async def main():
 
     async with httpx.AsyncClient(timeout=120) as http:
         while True:
-            jobs = await get_jobs(http)
+            try:
+                jobs = await get_jobs(http)
 
-            if not jobs:
+                if not jobs:
+                    await asyncio.sleep(SLEEP_SECONDS)
+                    continue
+
+                log("JOBS_FETCHED", count=len(jobs))
+                for job in jobs:
+                    await process_job(http, job)
+            except Exception as exc:
+                log("WORKER_LOOP_ERROR", error=str(exc)[:200])
                 await asyncio.sleep(SLEEP_SECONDS)
-                continue
-
-            log("JOBS_FETCHED", count=len(jobs))
-            for job in jobs:
-                await process_job(http, job)
 
 
 if __name__ == "__main__":

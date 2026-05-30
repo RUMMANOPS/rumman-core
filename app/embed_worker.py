@@ -17,6 +17,7 @@ import os
 import asyncio
 import re
 import unicodedata
+from datetime import date
 
 from typing import Optional
 
@@ -222,6 +223,7 @@ async def embed_and_insert_chunks(
             "ocr_confidence":    doc.get("ocr_confidence"),
             "authority_tier":    doc.get("authority_tier", "community"),
             "attribution_status": "original",
+            "valid_from":        date.today().isoformat(),
         }
 
         r = await http.post(

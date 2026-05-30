@@ -33,6 +33,11 @@ OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
 SEU_TENANT_ID = os.environ.get("SEU_TENANT_ID", "00000000-0000-0000-0000-000000000001")
 
+# Semester-end date for valid_until on extracted_items.
+# Update this env var at each semester boundary (Railway env vars).
+# 1447-second ends 2026-06-25 (exam appeal window close per academic_calendar).
+SEMESTER_END_DATE = os.environ.get("SEU_SEMESTER_END_DATE", "2026-06-25")
+
 WORKER = "daily_brief_v1"
 PROMPT_VERSION = "v1"
 MODEL = os.environ.get("DAILY_BRIEF_MODEL", "gpt-4o-mini")
@@ -214,6 +219,7 @@ async def store_items(
             "chat_name": chat_name,
             "source_message_ids": item_source_ids,
             "brief_run_id": run_id,
+            "valid_until": SEMESTER_END_DATE,
         })
 
     if not rows:

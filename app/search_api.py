@@ -382,21 +382,22 @@ async def _retrieve_intelligence_items(
     cutoff = (date.today() - timedelta(days=days_back)).isoformat()
 
     params: list[tuple] = [
-        ("tenant_id",      f"eq.{SEU_TENANT_ID}"),
-        ("created_at",     f"gte.{cutoff}"),
-        ("confidence",     "gte.0.65"),
-        ("validity_status", "neq.rejected"),
-        ("select",         "item_type,content,due_date,course_code,confidence,chat_name,created_at"),
-        ("order",          "due_date.asc.nullslast"),
-        ("limit",          "20"),
+        ("tenant_id",  f"eq.{SEU_TENANT_ID}"),
+        ("created_at", f"gte.{cutoff}"),
+        ("confidence", "gte.0.65"),
+        ("select",     "item_type,content,due_date,course_code,confidence,chat_name,created_at"),
+        ("order",      "due_date.asc.nullslast"),
+        ("limit",      "20"),
     ]
     if course_codes:
         params.append(("course_code", f"in.({','.join(course_codes)})"))
     if item_types:
         params.append(("item_type", f"in.({','.join(item_types)})"))
 
+    # Query the view — handles valid_until, validity_status, and superseded_by
+    # automatically. Falls back to empty list if migration 025 not yet applied.
     r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/extracted_items",
+        f"{SUPABASE_URL}/rest/v1/active_extracted_items",
         headers=HEADERS,
         params=params,
     )

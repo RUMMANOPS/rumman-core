@@ -159,10 +159,10 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     r = rows[0] if rows else {}
     synth_tokens = int(r.get("synthesis_tokens") or 0)
     synth_calls  = int(r.get("synthesis_calls") or 0)
-    # gpt-4o-mini: ~$0.60/1M output tokens + $0.15/1M input tokens (rough)
-    # intent calls: ~400 tokens each at $0.15/1M input
+    # gpt-4o: ~$2.50/1M input + $10/1M output ≈ $6/1M blended (rough)
+    # intent calls (gpt-4o-mini): ~400 tokens each at $0.15/1M input
     intent_cost = synth_calls * 400 * 0.15 / 1_000_000
-    synth_cost  = synth_tokens * 0.60 / 1_000_000
+    synth_cost  = synth_tokens * 6.00 / 1_000_000
     m["est_cost_usd"] = round(intent_cost + synth_cost, 4)
     m["synth_calls"]  = synth_calls
 

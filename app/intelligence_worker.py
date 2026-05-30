@@ -176,7 +176,9 @@ async def main():
             precondition_1="migration 011_intelligence_layer.sql must be applied first",
             precondition_2="review INTELLIGENCE_MAX_TOKENS_PER_RUN budget before enabling",
         )
-        return
+        # Stay alive so Railway keeps service in SUCCESS state (same pattern as audio_worker).
+        while True:
+            await asyncio.sleep(86400)
 
     ai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
     log("INTELLIGENCE_WORKER_START", batch_size=BATCH_SIZE, max_tokens=MAX_TOKENS_PER_RUN)

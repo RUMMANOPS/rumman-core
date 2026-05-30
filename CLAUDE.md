@@ -40,23 +40,31 @@ Current phase per `docs/06-roadmap/roadmap.md`: **Phase 1 → transitioning to P
 
 ## Runtime Topology
 
-Deployed on Railway. `Procfile` defines **seven independent processes** — they share Supabase but never call each other:
+Deployed on Railway. `Procfile` defines **eight independent processes** — they share Supabase but never call each other:
 
 | Process | File | Role | Status |
 |---|---|---|---|
 | `listener` | `app/rumman_engine.py` | Live Telethon `NewMessage` handler → `messages` + `telegram_sync_state`. Never crawls history. | Always on |
-| `audio` | `app/audio_worker.py` | Polls `processing_jobs` for `job_type=audio_transcribe` → OpenAI transcription → `media_files`. | Sleeping (86400s) |
-| `backfill` | `app/telegram_backfill_worker.py` | Claims one `telegram_backfill_jobs` row, processes with lease + heartbeat. Run on demand. | Sleeping (86400s) |
+| `backfill` | `app/telegram_backfill_worker.py` | Claims pending `telegram_backfill_jobs` rows, processes with lease + heartbeat. Loops until idle. | Always on |
 | `media` | `app/telegram_download_worker.py` | Unified handler: `audio_transcribe` + `telegram_media` jobs in one process (avoids session conflicts). | Always on |
 | `embed` | `app/embed_worker.py` | Polls `processing_jobs` for `job_type=embed_chunk` → chunk text → OpenAI embeddings → `document_chunks`. | Always on |
 | `search` | `app/search_api.py` | FastAPI search service: query understanding → pgvector → synthesis. Port `$PORT`. | Always on |
 | `bot` | `app/telegram_bot.py` | Student-facing Telegram bot: long-polls Telegram API, calls `/synthesize`, returns grounded answers. | Always on |
+| `intelligence` | `app/intelligence_worker.py` | Extract operational items (assignments, deadlines) from messages → `intelligence_items`. | Gated: `INTELLIGENCE_WORKER_ENABLED=true` |
+| `attribution` | `app/attribution_worker.py` | AI-assisted course attribution for untagged document chunks → `machine_asserted`. | Gated: `ATTRIBUTION_WORKER_ENABLED=true` |
 
-**Workers that exist but are NOT in the Procfile (deliberately off):**
+**Note on session architecture (three distinct StringSessions):**
+- `TELEGRAM_SESSION_STRING` — personal account; used by `listener` (rumman_engine.py)
+- `TELEGRAM_BACKFILL_SESSION_STRING` — personal account #2; used by `backfill` (telegram_backfill_worker.py)
+- `TELEGRAM_WORKER_SESSION_STRING` — RUMMAN/غيث dedicated number; used by `media` (telegram_download_worker.py)
+
+Never run two processes on the same StringSession simultaneously — causes `AuthKeyDuplicatedError`.
+
+**Workers NOT in the Procfile (run on demand locally):**
 
 | File | Role | Why off |
 |---|---|---|
-| `app/intelligence_worker.py` | Extract entities, tasks, decisions from messages | Phase 1 → Phase 2 boundary; requires ADR update |
+| `app/audio_worker.py` | Polls `processing_jobs` for `job_type=audio_transcribe` → OpenAI Whisper → `media_files`. | Superseded by unified `media` worker |
 | `app/daily_brief.py` | Generate structured daily briefs from Telegram streams | Requires intelligence layer; off until Phase 2 |
 | `app/pdf_worker.py` | Extract text from PDFs in Supabase Storage → `source_documents` | Run on demand when ingesting official documents |
 | `app/query_handler.py` | CLI + importable module: synthesize course intelligence from all layers | Development/debug tool; not a service |

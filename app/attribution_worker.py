@@ -216,8 +216,12 @@ async def main():
     daily_calls_day: str | None = None
 
     async with httpx.AsyncClient(timeout=30) as http:
-        from heartbeat import Heartbeat
-        hb = Heartbeat(http, worker_id="attribution_worker", process="attribution", interval_s=60)
+        try:
+            from heartbeat import Heartbeat
+            hb = Heartbeat(http, worker_id="attribution_worker", process="attribution", interval_s=60)
+        except Exception as e:
+            log("HEARTBEAT_IMPORT_ERROR", error=str(e))
+            hb = None
 
         while True:
             try:
@@ -232,8 +236,9 @@ async def main():
                     wait = seconds_until_utc_midnight()
                     log("DAILY_BUDGET_EXHAUSTED", calls=daily_calls,
                         limit=MAX_DAILY_CALLS, sleep_s=wait)
-                    await hb.beat(status="budget_paused",
-                                  metadata={"daily_calls": daily_calls, "limit": MAX_DAILY_CALLS})
+                    if hb:
+                        await hb.beat(status="budget_paused",
+                                      metadata={"daily_calls": daily_calls, "limit": MAX_DAILY_CALLS})
                     await asyncio.sleep(wait)
                     continue
 
@@ -241,7 +246,8 @@ async def main():
 
                 if not chunks:
                     log("IDLE", msg="no unattributed chunks remaining")
-                    await hb.beat(status="idle")
+                    if hb:
+                        await hb.beat(status="idle")
                     await asyncio.sleep(SLEEP_SECONDS)
                     continue
 
@@ -303,17 +309,19 @@ async def main():
                 log("BATCH_DONE", attributed_ai=attributed, attributed_regex=regex_attributed,
                     unattributable=unattributed, tokens_used=tokens_used,
                     daily_calls=daily_calls, daily_limit=MAX_DAILY_CALLS)
-                await hb.beat(
-                    status="running",
-                    metadata={"attributed": attributed + regex_attributed,
-                               "unattributable": unattributed,
-                               "tokens": tokens_used,
-                               "daily_calls": daily_calls},
-                )
+                if hb:
+                    await hb.beat(
+                        status="running",
+                        metadata={"attributed": attributed + regex_attributed,
+                                   "unattributable": unattributed,
+                                   "tokens": tokens_used,
+                                   "daily_calls": daily_calls},
+                    )
 
             except Exception as exc:
                 log("WORKER_ERROR", error=str(exc)[:200])
-                await hb.beat(status="error", metadata={"error": str(exc)[:200]})
+                if hb:
+                    await hb.beat(status="error", metadata={"error": str(exc)[:200]})
 
             await asyncio.sleep(SLEEP_SECONDS)
 

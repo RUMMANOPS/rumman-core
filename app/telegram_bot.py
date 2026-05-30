@@ -217,7 +217,6 @@ async def _synthesize(
 def _format_synthesis(data: dict, query: str = "") -> str:
     if not data.get("grounded"):
         # Try to give a more specific message if we can detect a course code
-        import re
         course_match = re.search(r'\b([A-Z]{2,4}\d{3})\b', query.upper())
         if course_match:
             code = course_match.group(1)
@@ -387,6 +386,7 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
 async def main() -> None:
     log.info("BOT_START | polling Telegram")
     offset: int | None = None
+    _tasks: set[asyncio.Task] = set()
 
     async with httpx.AsyncClient() as http:
         while True:
@@ -413,9 +413,13 @@ async def main() -> None:
                     msg = update.get("message")
                     cb  = update.get("callback_query")
                     if msg:
-                        asyncio.create_task(_handle(http, msg))
+                        t = asyncio.create_task(_handle(http, msg))
+                        _tasks.add(t)
+                        t.add_done_callback(_tasks.discard)
                     elif cb:
-                        asyncio.create_task(_handle_callback(http, cb))
+                        t = asyncio.create_task(_handle_callback(http, cb))
+                        _tasks.add(t)
+                        t.add_done_callback(_tasks.discard)
 
             except asyncio.CancelledError:
                 log.info("BOT_STOP")

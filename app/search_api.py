@@ -550,34 +550,50 @@ async def _run_retrieval(
     else:
         param_list = build_search_params(understanding, limit)
 
-    seen_params: set[tuple] = set()  # (query, course_code) pairs — same query for different courses must not be collapsed
     all_raw: list[dict] = []
     params_log: list[dict] = []
 
-    async with httpx.AsyncClient(timeout=30) as http:
-        for params in param_list:
-            q = params.query
-            dedup_key = (q, params.course_code)
-            if dedup_key in seen_params:
-                continue
-            seen_params.add(dedup_key)
+    # Deduplicate param_list before spawning tasks
+    seen_params: set[tuple] = set()
+    unique_params: list[SearchParams] = []
+    for p in param_list:
+        k = (p.query, p.course_code)
+        if k not in seen_params:
+            seen_params.add(k)
+            unique_params.append(p)
 
+    async with httpx.AsyncClient(timeout=30) as http:
+
+        async def _embed_and_retrieve(params: SearchParams) -> tuple[list[dict], dict]:
+            """Embed a query and retrieve matching chunks. Returns (rows_above_threshold, log)."""
             resp = await ai.embeddings.create(
-                model=EMBED_MODEL, input=q, dimensions=EMBED_DIMS
+                model=EMBED_MODEL, input=params.query, dimensions=EMBED_DIMS
             )
             embedding = resp.data[0].embedding
             fetch_count = min(params.limit * 3, 150)
-            threshold = MIN_SIMILARITY_COURSE if params.course_code else MIN_SIMILARITY
-
+            threshold  = MIN_SIMILARITY_COURSE if params.course_code else MIN_SIMILARITY
             raw = await _retrieve(http, embedding, params.course_code, params.source_type, fetch_count)
-            for row in raw:
-                if (row.get("similarity") or 0) >= threshold:
-                    all_raw.append(row)
-            params_log.append({
-                "query":       q,
+            rows = [r for r in raw if (r.get("similarity") or 0) >= threshold]
+            log_entry = {
+                "query":       params.query,
                 "course_code": params.course_code,
                 "source_type": params.source_type,
-            })
+            }
+            return rows, log_entry
+
+        # Run all embed+retrieve pairs in parallel — reduces latency from O(N) to O(1)
+        # for multi-course enrolled users (up to 6 pairs: 3 courses × 2 languages).
+        gather_results = await asyncio.gather(
+            *[_embed_and_retrieve(p) for p in unique_params],
+            return_exceptions=True,
+        )
+        for result in gather_results:
+            if isinstance(result, Exception):
+                log.warning("embed_retrieve_failed | %s", result)
+                continue
+            rows, log_entry = result
+            all_raw.extend(rows)
+            params_log.append(log_entry)
 
         # Inject structured course facts for any detected course codes (institutional layer)
         if understanding.intent and understanding.intent.course_codes:

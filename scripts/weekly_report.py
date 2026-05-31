@@ -36,6 +36,7 @@ SUPABASE_URL  = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY  = os.environ["SUPABASE_KEY"]
 BOT_TOKEN     = os.getenv("TELEGRAM_BOT_TOKEN", "")
 OPS_CHAT_ID   = os.getenv("RUMMAN_OPS_CHAT_ID", "")
+SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 HEADERS = {
     "apikey":        SUPABASE_KEY,
@@ -199,22 +200,25 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     """)
     m["course_coverage"] = {r["coverage_level"]: int(r["n"]) for r in rows}
 
-    rows = await query(http, """
+    rows = await query(http, f"""
         SELECT COUNT(*) AS n FROM exam_intelligence
+        WHERE tenant_id = '{SEU_TENANT_ID}'
     """)
     m["exam_signals"] = int(rows[0]["n"]) if rows else 0
 
     # ── Message signals ───────────────────────────────────────────────────────
 
-    rows = await query(http, """
+    rows = await query(http, f"""
         SELECT signal_type, COUNT(*) AS n
         FROM message_signals
+        WHERE tenant_id = '{SEU_TENANT_ID}'
         GROUP BY signal_type
     """)
     m["msg_signals_by_type"] = {r["signal_type"]: int(r["n"]) for r in rows}
 
-    rows = await query(http, """
-        SELECT COUNT(*) AS n FROM message_signals WHERE is_current_semester = TRUE
+    rows = await query(http, f"""
+        SELECT COUNT(*) AS n FROM message_signals
+        WHERE tenant_id = '{SEU_TENANT_ID}' AND is_current_semester = TRUE
     """)
     m["msg_signals_current"] = int(rows[0]["n"]) if rows else 0
 

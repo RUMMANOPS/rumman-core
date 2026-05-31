@@ -925,11 +925,18 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     _stop_typing = asyncio.Event()
     _typing_task = asyncio.create_task(_typing_keepalive(http, chat_id, _stop_typing))
 
+    data = None
     try:
         data = await _synthesize(http, query, user_id, session_id, history)
+    except Exception as exc:
+        log.error("SYNTHESIS_EXCEPTION | chat=%d | error=%s", chat_id, exc)
     finally:
         _stop_typing.set()
         _typing_task.cancel()
+        try:
+            await _typing_task
+        except asyncio.CancelledError:
+            pass
 
     if data is None:
         await _send(http, chat_id, _ERROR)

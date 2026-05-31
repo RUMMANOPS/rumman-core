@@ -216,6 +216,27 @@ async def main():
     daily_calls_day: str | None = None
 
     async with httpx.AsyncClient(timeout=30) as http:
+        # Recover daily_calls from last heartbeat so restart within same day
+        # doesn't reset the budget counter and allow over-spending.
+        try:
+            r = await http.get(
+                f"{SUPABASE_URL}/rest/v1/worker_heartbeats",
+                headers=HEADERS,
+                params={"worker_id": "eq.attribution_worker", "select": "last_seen_at,metadata"},
+            )
+            if r.status_code == 200 and r.json():
+                row = r.json()[0]
+                last_seen = (row.get("last_seen_at") or "")[:10]  # YYYY-MM-DD
+                today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+                if last_seen == today:
+                    recovered = int((row.get("metadata") or {}).get("daily_calls", 0))
+                    if recovered > 0:
+                        daily_calls = recovered
+                        daily_calls_day = today
+                        log("DAILY_CALLS_RECOVERED", daily_calls=daily_calls, limit=MAX_DAILY_CALLS)
+        except Exception as e:
+            log("DAILY_CALLS_RECOVERY_FAILED", error=str(e)[:80])
+
         try:
             from heartbeat import Heartbeat
             hb = Heartbeat(http, worker_id="attribution_worker", process="attribution", interval_s=60)

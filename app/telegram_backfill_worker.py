@@ -324,6 +324,24 @@ async def update_job_progress(http, job, processed, last_id, oldest_id, done=Fal
         payload,
     )
 
+    if done:
+        cid = job.get("platform_chat_id")
+        if cid and oldest_id:
+            await rest_patch(
+                http,
+                "telegram_sync_state",
+                {"platform_chat_id": f"eq.{cid}"},
+                {
+                    "backfill_completed": True,
+                    "oldest_message_id":  str(oldest_id),
+                    "coverage_verified_at": utc_now(),
+                },
+            )
+            print(
+                f"BACKFILL_COMPLETED_SYNC_STATE | chat_id={cid} | oldest_id={oldest_id}",
+                flush=True,
+            )
+
 
 async def fail_job(http, job, error):
     await rest_patch(
@@ -529,6 +547,7 @@ async def process_job(client, http, job):
 
 NO_JOBS_SLEEP_SECONDS = 30
 RECONNECT_SLEEP_SECONDS = 15
+GAP_FILL_JOB_TYPE = "telegram_gap_fill"
 
 
 def _is_disconnect(e: Exception) -> bool:
@@ -604,6 +623,131 @@ async def discover_missing_jobs(http: httpx.AsyncClient) -> int:
     return created
 
 
+async def release_stale_gap_fill_jobs(http: httpx.AsyncClient) -> None:
+    """Reset gap_fill processing_jobs stuck in 'processing' (from a crashed worker)."""
+    await http.patch(
+        f"{SUPABASE_URL}/rest/v1/processing_jobs",
+        headers=HEADERS,
+        params={"job_type": f"eq.{GAP_FILL_JOB_TYPE}", "status": "eq.processing"},
+        json={"status": "pending"},
+    )
+
+
+async def claim_gap_fill_job(http: httpx.AsyncClient) -> dict | None:
+    """Claim the oldest pending gap_fill job. Returns None if none available."""
+    rows = await rest_get(
+        http,
+        "processing_jobs",
+        {
+            "job_type": f"eq.{GAP_FILL_JOB_TYPE}",
+            "status":   "eq.pending",
+            "order":    "created_at.asc",
+            "limit":    "1",
+        },
+    )
+    if not rows:
+        return None
+
+    job = rows[0]
+    ok = await rest_patch(
+        http,
+        "processing_jobs",
+        {"id": f"eq.{job['id']}", "status": "eq.pending"},
+        {"status": "processing"},
+    )
+    if not ok:
+        return None
+
+    fresh = await rest_get(
+        http,
+        "processing_jobs",
+        {"id": f"eq.{job['id']}", "status": "eq.processing", "limit": "1"},
+    )
+    if not fresh:
+        return None
+
+    j = fresh[0]
+    p = j.get("payload") or {}
+    print(
+        f"GAP_FILL_CLAIMED | id={j['id']} | chat={p.get('chat_name')} | range=[{p.get('fill_min_id')},{p.get('fill_max_id')}]",
+        flush=True,
+    )
+    return j
+
+
+async def finish_gap_fill_job(http: httpx.AsyncClient, job_id: str,
+                               status: str, result: dict = None, error: str = None) -> None:
+    body: dict = {"status": status}
+    if result is not None:
+        body["result"] = result
+    if error is not None:
+        body["error"] = error
+    await rest_patch(http, "processing_jobs", {"id": f"eq.{job_id}"}, body)
+
+
+async def process_gap_fill_job(client: TelegramClient, http: httpx.AsyncClient, job: dict) -> None:
+    """Fetch and insert a specific message ID range for a chat (gap repair)."""
+    payload    = job.get("payload") or {}
+    job_id     = job["id"]
+    chat_id    = int(payload.get("platform_chat_id", 0))
+    chat_name  = payload.get("chat_name") or f"Chat {chat_id}"
+    chat_type  = payload.get("chat_type") or "unknown"
+    fill_min   = int(payload.get("fill_min_id", 0))
+    fill_max   = int(payload.get("fill_max_id", 0))
+
+    if not chat_id or not fill_min or not fill_max or fill_max < fill_min:
+        await finish_gap_fill_job(http, job_id, "failed",
+                                  error="missing or invalid fill_min_id / fill_max_id")
+        return
+
+    print(
+        f"GAP_FILL_START | chat={chat_name} | range=[{fill_min},{fill_max}] | span={fill_max - fill_min + 1}",
+        flush=True,
+    )
+
+    try:
+        entity = await resolve_entity(client, chat_id, chat_type)
+    except Exception as e:
+        print(f"GAP_FILL_ENTITY_ERROR | chat={chat_name} | {e}", flush=True)
+        await finish_gap_fill_job(http, job_id, "failed", error=str(e))
+        return
+
+    processed = inserted = duplicate = 0
+
+    try:
+        # Telethon: min_id is exclusive-lower, max_id is exclusive-upper
+        # To fetch [fill_min, fill_max] inclusive: min_id=fill_min-1, max_id=fill_max+1
+        async for msg in client.iter_messages(
+            entity,
+            min_id=fill_min - 1,
+            max_id=fill_max + 1,
+            limit=None,
+        ):
+            processed += 1
+            mt = message_type(msg)
+            fm = file_meta(msg)
+            msg_payload = await build_payload(msg, chat_name, chat_type, chat_id)
+            result = await rest_post(http, "messages", msg_payload)
+            if result == "inserted":
+                inserted += 1
+                if mt not in ("text", "poll", "other"):
+                    await maybe_spawn_media_job(http, msg, mt, fm, chat_id, chat_type)
+            elif result == "duplicate":
+                duplicate += 1
+
+    except Exception as e:
+        print(f"GAP_FILL_FETCH_ERROR | chat={chat_name} | {e}", flush=True)
+        await finish_gap_fill_job(http, job_id, "failed", error=str(e))
+        return
+
+    print(
+        f"GAP_FILL_DONE | chat={chat_name} | range=[{fill_min},{fill_max}] | processed={processed} | inserted={inserted} | duplicate={duplicate}",
+        flush=True,
+    )
+    await finish_gap_fill_job(http, job_id, "processed",
+                               result={"processed": processed, "inserted": inserted, "duplicate": duplicate})
+
+
 async def main():
     print(f"TELEGRAM BACKFILL WORKER STARTING | session={'dedicated' if os.environ.get('TELEGRAM_BACKFILL_SESSION_STRING') else 'shared_warn'}", flush=True)
 
@@ -611,6 +755,7 @@ async def main():
         # At startup: create backfill jobs for any chats the listener has seen
         # but that don't have a job yet (e.g. new groups joined while worker was off).
         await discover_missing_jobs(http)
+        await release_stale_gap_fill_jobs(http)
 
         while True:
             client = TelegramClient(
@@ -636,6 +781,24 @@ async def main():
                     print("ENTITY_CACHE_TIMEOUT | continuing with partial cache", flush=True)
 
                 while True:
+                    # ── Priority 1: gap-fill jobs (repair missed live-listener messages) ──────
+                    gap_job = await claim_gap_fill_job(http)
+                    if gap_job:
+                        try:
+                            await process_gap_fill_job(client, http, gap_job)
+                        except AuthKeyDuplicatedError:
+                            print(f"AUTH_KEY_DUPLICATED | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+                            await finish_gap_fill_job(http, gap_job["id"], "pending")
+                            break
+                        except Exception as e:
+                            if _is_disconnect(e):
+                                await finish_gap_fill_job(http, gap_job["id"], "pending")
+                                print(f"RECONNECTING | {e}", flush=True)
+                                break
+                            await finish_gap_fill_job(http, gap_job["id"], "failed", error=str(e))
+                        continue
+
+                    # ── Priority 2: full historical backfill ──────────────────────────────────
                     job = await claim_job(http)
 
                     if not job:

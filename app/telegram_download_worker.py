@@ -128,16 +128,25 @@ async def update_job(http: httpx.AsyncClient, job_id: str, status: str,
         log("UPDATE_JOB_ERROR", id=job_id, status=r.status_code, error=r.text[:120])
 
 
+def _bare_channel_id(cid: int) -> int:
+    """Strip -100 MTProto prefix from full channel IDs for use with PeerChannel."""
+    if cid < 0:
+        s = str(abs(cid))
+        if s.startswith("100") and len(s) > 4:
+            return int(s[3:])
+    return abs(cid)
+
+
 async def resolve_entity(client: TelegramClient, chat_id: str, chat_type: str):
     cid = int(chat_id)
     if chat_type in ("channel", "megagroup"):
-        return await client.get_entity(PeerChannel(cid))
+        return await client.get_entity(PeerChannel(_bare_channel_id(cid)))
     if chat_type == "group":
-        return await client.get_entity(PeerChat(cid))
+        return await client.get_entity(PeerChat(abs(cid)))
     try:
         return await client.get_entity(cid)
     except Exception:
-        return await client.get_entity(PeerChannel(cid))
+        return await client.get_entity(PeerChannel(_bare_channel_id(cid)))
 
 
 # ── Audio ──────────────────────────────────────────────────────────────────────

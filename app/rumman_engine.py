@@ -1,7 +1,7 @@
 import os
 import json
 import asyncio
-from datetime import timezone
+from datetime import datetime, timezone
 
 import httpx
 from dotenv import load_dotenv
@@ -113,6 +113,95 @@ async def ensure_backfill_job(
         print(f"BACKFILL_CREATE_ERROR | chat={chat_name} | status={r.status_code}", flush=True)
 
 
+async def ensure_gap_fill_job(
+    http: httpx.AsyncClient,
+    platform_chat_id: str,
+    chat_name: str,
+    chat_type: str,
+    min_id: int,
+    max_id: int,
+) -> None:
+    """Queue a telegram_gap_fill processing_job for the range [min_id, max_id]."""
+    if max_id < min_id:
+        return
+    target_key = f"gap:{platform_chat_id}:{min_id}:{max_id}"
+    r = await http.post(
+        f"{SUPABASE_URL}/rest/v1/processing_jobs",
+        headers=HEADERS,
+        json={
+            "job_type":     "telegram_gap_fill",
+            "status":       "pending",
+            "payload": {
+                "platform_chat_id": platform_chat_id,
+                "chat_name":        chat_name,
+                "chat_type":        chat_type,
+                "fill_min_id":      min_id,
+                "fill_max_id":      max_id,
+            },
+            "retry_count":  0,
+            "target_table": "messages",
+            "target_key":   target_key,
+        },
+    )
+    if r.status_code in (200, 201):
+        print(
+            f"GAP_FILL_JOB_CREATED | chat={chat_name} | range=[{min_id},{max_id}] | span={max_id - min_id + 1}",
+            flush=True,
+        )
+    elif r.status_code == 409:
+        pass  # already queued — idempotent
+    else:
+        print(
+            f"GAP_FILL_JOB_ERROR | chat={chat_name} | status={r.status_code}",
+            flush=True,
+        )
+
+
+async def scan_for_listener_gaps(client: TelegramClient, http: httpx.AsyncClient) -> None:
+    """Startup scan: for each tracked chat, compare our newest_message_id against
+    Telegram's actual current newest. Create a gap_fill job for any missed range."""
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/telegram_sync_state",
+        headers=HEADERS,
+        params={"select": "platform_chat_id,chat_name,chat_type,newest_message_id", "limit": "500"},
+    )
+    if r.status_code >= 400:
+        print(f"GAP_SCAN_READ_ERROR | {r.status_code}", flush=True)
+        return
+
+    rows = r.json()
+    checked = gaps_created = 0
+
+    for state in rows:
+        known_newest = state.get("newest_message_id")
+        if not known_newest:
+            continue
+        chat_id   = state["platform_chat_id"]
+        chat_name = state.get("chat_name") or f"Chat {chat_id}"
+        chat_type = state.get("chat_type") or "unknown"
+
+        try:
+            entity = await client.get_entity(int(chat_id))
+            actual_newest = None
+            async for msg in client.iter_messages(entity, limit=1):
+                actual_newest = msg.id
+            if actual_newest is None:
+                continue
+            known = int(known_newest)
+            if actual_newest > known + _GAP_THRESHOLD:
+                await ensure_gap_fill_job(
+                    http, chat_id, chat_name, chat_type,
+                    known + 1, actual_newest,
+                )
+                gaps_created += 1
+            checked += 1
+            await asyncio.sleep(0.3)  # gentle rate limit
+        except Exception as e:
+            print(f"GAP_SCAN_SKIP | chat={chat_name} | {e}", flush=True)
+
+    print(f"GAP_SCAN_DONE | checked={checked} | gaps_created={gaps_created}", flush=True)
+
+
 async def discover_and_register_groups(client: TelegramClient, http: httpx.AsyncClient) -> None:
     """
     Enumerate all Telegram dialogs the collector account is in and create pending
@@ -158,6 +247,7 @@ async def discover_and_register_groups(client: TelegramClient, http: httpx.Async
 
 
 _DISCOVERY_INTERVAL = 6 * 3600  # 6 hours
+_GAP_THRESHOLD = 10  # minimum message ID jump before creating a gap-fill job
 
 
 async def _periodic_discovery_loop(client: TelegramClient, http: httpx.AsyncClient) -> None:
@@ -239,23 +329,35 @@ async def get_current_sync_state(http, platform_chat_id):
 async def update_sync_state(http, payload):
     current = await get_current_sync_state(http, payload["platform_chat_id"])
 
-    current_total = 0
+    current_total  = 0
     current_oldest = None
+    message_id     = int(payload["platform_message_id"])
 
     if current:
-        current_total = current.get("total_messages_seen") or 0
+        current_total  = current.get("total_messages_seen") or 0
         current_oldest = current.get("oldest_message_id")
 
-    message_id = int(payload["platform_message_id"])
+        # ── Gap detection: large ID jump means messages were missed during downtime ──
+        known_newest = current.get("newest_message_id")
+        if known_newest and message_id > int(known_newest) + _GAP_THRESHOLD:
+            await ensure_gap_fill_job(
+                http,
+                payload["platform_chat_id"],
+                payload["chat_name"],
+                payload["telegram_chat_type"],
+                int(known_newest) + 1,
+                message_id - 1,
+            )
 
     sync_payload = {
-        "platform_chat_id": payload["platform_chat_id"],
-        "chat_type": payload["telegram_chat_type"],
-        "chat_name": payload["chat_name"],
-        "backfill_completed": False,
-        "oldest_message_id": current_oldest,
-        "newest_message_id": message_id,
+        "platform_chat_id":    payload["platform_chat_id"],
+        "chat_type":           payload["telegram_chat_type"],
+        "chat_name":           payload["chat_name"],
+        "backfill_completed":  False,
+        "oldest_message_id":   current_oldest,
+        "newest_message_id":   message_id,
         "total_messages_seen": current_total + 1,
+        "last_live_seen_at":   datetime.now(timezone.utc).isoformat(),
     }
 
     r = await http.post(
@@ -368,6 +470,7 @@ async def main():
             await load_backfill_registry(http)
             await load_college_chat_map(http)
             await discover_and_register_groups(client, http)
+            await scan_for_listener_gaps(client, http)
             asyncio.create_task(_periodic_discovery_loop(client, http))
 
             @client.on(events.NewMessage)

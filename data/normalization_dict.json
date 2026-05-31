@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026-05-30b",
+    "version": "2026-06-01",
     "description": "Gulf/Saudi academic student Arabic normalization dictionary. Phrases are applied before words (longest-match). Source tags: seed=bootstrapped, corpus=mined from RUMMAN messages, manual=human-added.",
     "apply_order": "phrases first (longest to shortest), then words"
   },
@@ -47,9 +47,9 @@
     "ما معنى":              "",
     "وش معنى":              "",
     "شو معنى":              "",
-    "عرّف لي":              "",
-    "عرف لي":               "",
-    "شرح لي":               "",
+    "عرّف لي":              "تعريف",
+    "عرف لي":               "تعريف",
+    "شرح لي":               "اشرح",
     "وش فيه":               "ما الذي يوجد",
     "ايش فيه":              "ما الذي يوجد",
     "وش عندهم":             "ماذا لديهم",

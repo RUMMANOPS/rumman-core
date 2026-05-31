@@ -208,18 +208,23 @@ async def embed_and_insert_chunks(
 
         # Retry with progressive truncation on context-length errors (mojibake text
         # tokenizes at up to 2 tokens/char, blowing past the 8192 token hard limit).
+        # A single bad chunk must not fail the whole document — skip and continue.
         embed_text = chunk_text
+        embedding = None
         for attempt in range(3):
             try:
                 resp = await ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS)
+                embedding = resp.data[0].embedding
                 break
             except Exception as e:
                 if "maximum context length" in str(e) and attempt < 2:
                     embed_text = embed_text[:len(embed_text) // 2]
                     log("CHUNK_HALVED", doc=doc["id"], chunk=i, new_len=len(embed_text), attempt=attempt + 1)
                 else:
-                    raise
-        embedding = resp.data[0].embedding
+                    log("CHUNK_EMBED_FAILED", doc=doc["id"], chunk=i, error=str(e)[:120])
+                    break
+        if embedding is None:
+            continue
 
         row = {
             "source_document_id": doc["id"],

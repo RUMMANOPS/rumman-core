@@ -27,9 +27,10 @@ from openai import AsyncOpenAI
 
 load_dotenv()
 
-SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+SUPABASE_URL  = os.environ["SUPABASE_URL"].rstrip("/")
+SUPABASE_KEY  = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
+SEU_TENANT_ID  = "00000000-0000-0000-0000-000000000001"
 
 MAX_RETRIES = 5
 SLEEP_SECONDS = 5
@@ -222,6 +223,7 @@ async def embed_and_insert_chunks(
 
         row = {
             "source_document_id": doc["id"],
+            "tenant_id":          doc.get("tenant_id") or SEU_TENANT_ID,
             "content": chunk_text,
             "embedding": embedding,
             "embedding_model": EMBED_MODEL,

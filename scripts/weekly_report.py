@@ -204,6 +204,20 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     """)
     m["exam_signals"] = int(rows[0]["n"]) if rows else 0
 
+    # ── Message signals ───────────────────────────────────────────────────────
+
+    rows = await query(http, """
+        SELECT signal_type, COUNT(*) AS n
+        FROM message_signals
+        GROUP BY signal_type
+    """)
+    m["msg_signals_by_type"] = {r["signal_type"]: int(r["n"]) for r in rows}
+
+    rows = await query(http, """
+        SELECT COUNT(*) AS n FROM message_signals WHERE is_current_semester = TRUE
+    """)
+    m["msg_signals_current"] = int(rows[0]["n"]) if rows else 0
+
     return m
 
 
@@ -279,6 +293,24 @@ def format_report(m: dict) -> str:
         )
         lines.append(
             f"  Strong: {strong}  |  Moderate: {moderate}  |  Thin: {thin}"
+        )
+
+    # Message signals
+    msg_by_type  = m.get("msg_signals_by_type", {})
+    msg_current  = m.get("msg_signals_current", 0)
+    msg_total    = sum(msg_by_type.values())
+    if msg_total > 0:
+        exam_emp = msg_by_type.get("exam_emphasis",     0)
+        diff_sig = msg_by_type.get("difficulty",        0)
+        prof_sig = msg_by_type.get("professor_note",    0)
+        res_sig  = msg_by_type.get("resource_rec",      0)
+        conf_sig = msg_by_type.get("confusion_cluster", 0)
+        lines.append(
+            f"\n<b>MESSAGE SIGNALS</b>  {msg_total} total  |  {msg_current} current semester"
+        )
+        lines.append(
+            f"  Exam emphasis: {exam_emp}  |  Difficulty: {diff_sig}  |  "
+            f"Professor: {prof_sig}  |  Resources: {res_sig}  |  Confusion: {conf_sig}"
         )
 
     # Unmet queries

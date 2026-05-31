@@ -29,7 +29,7 @@
         "مواد", "مصادر"
       ],
       "bias_intent": "resource",
-      "bias_source_type": "study_plan"
+      "bias_source_type": null
     },
     {
       "id": "deadline",

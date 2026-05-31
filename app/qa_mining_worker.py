@@ -476,8 +476,8 @@ async def process_chat(
                 continue
 
             fp = _pair_fingerprint(chat_name,
-                                   pair.get("question", ""),
-                                   pair.get("answer", ""))
+                                   pair.get("question") or "",
+                                   pair.get("answer") or "")
             if fp in known_fps:
                 continue
 

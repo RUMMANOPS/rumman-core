@@ -93,7 +93,7 @@ _EXAM_KEYWORDS = {
 _COURSE_NUDGE = (
     "\n\n💡 <i>لتحسين إجاباتي لموادك تحديداً، أرسل:\n"
     "<code>/mycourses IT362 CS251 MGT311</code>\n"
-    "وسأفيلتر النتائج حسب موادك.</i>"
+    "وسأفيلتر النتائج حسب موادك. لمسح الموادك: /forget</i>"
 )
 
 # ---------------------------------------------------------------------------
@@ -138,7 +138,9 @@ _CAPABILITY = (
 _USER_IDENTITY = (
     "أنا ما عندي معلومات شخصية عنك سوى رقم محادثتك.\n\n"
     "لو سجلت موادك، أقدر أخصص إجاباتي:\n"
-    "<code>/mycourses IT362 CS251 MGT311</code>"
+    "<code>/mycourses IT362 CS251 MGT311</code>\n\n"
+    "لمسح المواد المحفوظة:\n"
+    "<code>/forget</code>"
 )
 _NO_RESULTS = (
     "ما لقيت إجابة في المواد المتاحة.\n\n"
@@ -1005,7 +1007,7 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
         q.append({"role": "user",      "content": text})
         q.append({"role": "assistant", "content": answer_text[:400]})
 
-    if grounded and chat_id not in _PROMPTED_FOR_COURSES and chat_id not in _ENROLLED:
+    if grounded and chat_id not in _PROMPTED_FOR_COURSES and chat_id not in _ENROLLED_CONFIRMED:
         _PROMPTED_FOR_COURSES.add(chat_id)
         reply = reply + _COURSE_NUDGE
 

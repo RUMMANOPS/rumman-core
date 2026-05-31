@@ -38,10 +38,11 @@ SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 
-MAX_RETRIES = 5
+MAX_RETRIES    = 5
 SLEEP_SECONDS  = 3
 PARALLEL_JOBS  = 10   # concurrent OCR/download tasks per fetch cycle
-INSTITUTION = "SEU"
+INSTITUTION    = "SEU"
+SEU_TENANT_ID  = "00000000-0000-0000-0000-000000000001"
 VISION_MODEL = "gpt-4o"
 MAX_VISION_PAGES = 10
 
@@ -402,6 +403,7 @@ async def handle_telegram_media(client: TelegramClient, ai: AsyncOpenAI,
             log("MEDIA_EXTRACTED", id=job_id, method=extraction_method, chars=char_count)
 
         doc_id = await create_source_document(http, {
+            "tenant_id":          SEU_TENANT_ID,
             "content_hash":       content_hash,
             "storage_path":       None,
             "raw_file_deleted_at": "now()",

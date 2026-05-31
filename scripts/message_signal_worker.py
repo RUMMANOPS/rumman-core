@@ -410,7 +410,8 @@ async def insert_signals(
         }
 
         if dry_run:
-            print(f"    [DRY RUN] {s['signal_type']:20s} | {s.get('course_code','—'):8s} | "
+            code = s.get("course_code") or "—"
+            print(f"    [DRY RUN] {s['signal_type']:20s} | {code:8s} | "
                   f"conf={s['confidence']:.2f} | {s['signal_content'][:70]}")
             existing_fps.add(fp)
             inserted += 1

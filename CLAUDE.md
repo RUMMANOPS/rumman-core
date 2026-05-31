@@ -158,6 +158,7 @@ Operational CLI tools in `scripts/`. All require `.env` with `SUPABASE_URL`, `SU
 | `backfill_course_codes.py` | Regex + LLM inference to fill null course_code on source_documents and their chunks |
 | `weekly_report.py` | Weekly ops + product health report (pipeline, query volume, corpus coverage) → Telegram ops channel |
 | `eval_bot_quality.py` | Before/after synthesis quality comparison for 10 representative test queries |
+| `message_signal_worker.py` | Extract typed intelligence signals from Telegram messages → `message_signals` (exam_emphasis, difficulty, professor_note, resource_rec, confusion_cluster) |
 
 ## Commands
 

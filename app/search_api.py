@@ -646,6 +646,8 @@ def _select_synthesis_model(intent_type: str | None, confidence: float | None) -
         return _SYNTHESIS_PREMIUM_MODEL, 700
     if confidence is not None and confidence < 0.55:
         return _SYNTHESIS_PREMIUM_MODEL, 700
+    if intent_type == "concept_explain":
+        return _SYNTHESIS_MODEL, 600  # complex concepts need room for full definitions
     return _SYNTHESIS_MODEL, 400
 
 

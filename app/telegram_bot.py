@@ -20,6 +20,7 @@ Environment:
 
 import os
 import re
+import json
 import asyncio
 import hashlib
 import logging
@@ -497,6 +498,177 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
 
 
 # ---------------------------------------------------------------------------
+# Planning handler — multi-course context + guidance requests
+# ---------------------------------------------------------------------------
+
+_EXAM_PROXIMITY_WORDS = {
+    "finals", "final", "midterm", "midterms", "exam", "exams",
+    "فاينل", "ميدترم", "اختبار", "الفاينل", "الاختبار",
+    "نهائي", "نهاية الفصل", "نهاية الترم", "الترم",
+}
+_HELP_REQUEST_WORDS = {
+    "what can you", "help me", "how can you", "what should i",
+    "ساعدني", "وش تقدر", "كيف تساعد", "ابغى مساعدة",
+    "شو تقدر", "وش تقدر تسوي", "تقدر تساعد", "ابغى مساعدتك",
+}
+
+_PLANNING_SYSTEM = """\
+أنت رمّان — مساعد أكاديمي لطلاب SEU.
+
+الطالب أعطاك سياق عن موادهم وطلب منك المساعدة في الاستعداد.
+عندك تقرير بالمحتوى المتوفر لكل مادة في قاعدة البيانات.
+
+قواعد الرد:
+- رد بعربية خليجية طبيعية ودافئة — مثل زميل ذكي يعرف الجامعة
+- اذكر بالضبط وش عندك لكل مادة بصدق ومباشر
+- الأولوية: لو عندك "تجميعات اختبارات" ← هذا أهم شيء قبل الفاينل
+- لو ما عندك تجميعات: اذكر وش عندك (خطة دراسية، محتوى المادة)
+- لو ما عندك شيء لمادة: قول "غطاء محدود حالياً" بصدق
+- اختم برسالة واحدة: سؤال عملي أو اقتراح للخطوة التالية
+- لا تطول ← واضح ومباشر أفضل
+"""
+
+
+def _is_planning_query(text: str) -> bool:
+    """Detect high-intent multi-course context-sharing + guidance requests."""
+    codes = _COURSE_CODE_RE.findall(text)
+    if len(codes) >= 3:
+        return True
+
+    tl = text.lower()
+    has_exam = any(w in tl for w in _EXAM_PROXIMITY_WORDS)
+    has_help = any(w in tl for w in _HELP_REQUEST_WORDS)
+    # Multi-line list = student enumerating their courses
+    non_empty_lines = [l.strip() for l in text.split("\n") if len(l.strip()) > 8]
+    has_list = len(non_empty_lines) >= 4
+
+    if len(codes) >= 2 and has_exam and has_help:
+        return True
+    if has_exam and has_list and has_help:
+        return True
+    return False
+
+
+async def _handle_planning(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
+    """Inventory-first handler for multi-course guidance requests."""
+    await _typing(http, chat_id)
+
+    # ── Extract explicit course codes ──────────────────────────────────────
+    codes = [m.upper() for m in _COURSE_CODE_RE.findall(text)]
+
+    # ── Extract course names via LLM when codes are absent ────────────────
+    names: list[str] = []
+    if len(codes) < 2 and _ai:
+        try:
+            resp = await asyncio.wait_for(
+                _ai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": (
+                            'Extract university course names from this message. '
+                            'Return JSON only: {"courses": ["Course Name 1", ...]}'
+                        )},
+                        {"role": "user", "content": text[:500]},
+                    ],
+                    max_tokens=150,
+                    temperature=0,
+                ),
+                timeout=6.0,
+            )
+            raw = resp.choices[0].message.content.strip()
+            data = json.loads(raw)
+            names = data.get("courses", []) if isinstance(data, dict) else []
+        except Exception as exc:
+            log.debug("course_name_extraction_failed | %s", exc)
+
+    # ── Call inventory endpoint ────────────────────────────────────────────
+    inventory: dict = {}
+    unresolved: list[str] = []
+    try:
+        r = await http.post(
+            f"{SEARCH_API_URL}/v1/courses/inventory",
+            json={"codes": codes, "names": names},
+            timeout=12,
+        )
+        if r.status_code == 200:
+            data = r.json()
+            inventory  = data.get("inventory", {})
+            unresolved = data.get("unresolved_names", [])
+    except Exception as exc:
+        log.warning("inventory_check_failed | %s", exc)
+
+    # Persist discovered courses for session context
+    found_codes = list(inventory.keys())
+    if found_codes and chat_id not in _ENROLLED:
+        _ENROLLED[chat_id] = found_codes
+
+    # ── No courses resolved — ask for codes ───────────────────────────────
+    if not inventory and not codes:
+        await _send(http, chat_id,
+            "ما قدرت أتعرف على رموز موادك تلقائياً.\n\n"
+            "أرسلها بالأكواد مثل: <code>MGT325 FIN101 CS251</code>\n"
+            "وأعطيك تقرير مفصل عن كل مادة."
+        )
+        return
+
+    # ── Build inventory summary for LLM ───────────────────────────────────
+    inv_lines: list[str] = []
+    for code, info in inventory.items():
+        name    = info.get("name_ar") or info.get("name_en") or code
+        chunks  = info.get("chunk_count", 0)
+        labels  = info.get("source_labels") or []
+        if chunks == 0:
+            inv_lines.append(f"{code} ({name}): غطاء محدود حالياً")
+        else:
+            src = " + ".join(labels) if labels else "محتوى عام"
+            inv_lines.append(f"{code} ({name}): {src} — {chunks} مقطع")
+    for name in unresolved[:3]:
+        inv_lines.append(f'"{name}": ما عندي رمز لهذي المادة')
+
+    if not _ai:
+        lines = ["شفت موادك، هذا اللي عندي:\n"]
+        lines += [f"• {l}" for l in inv_lines]
+        lines.append("\nمن وين تبي تبدأ؟")
+        await _send(http, chat_id, "\n".join(lines))
+        return
+
+    prompt = (
+        f"رسالة الطالب:\n{text}\n\n"
+        f"المحتوى المتوفر في قاعدة البيانات:\n" + "\n".join(inv_lines) +
+        "\n\nاكتب رداً مفيداً ومحدداً بالعربية الخليجية."
+    )
+    try:
+        resp = await asyncio.wait_for(
+            _ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[
+                    {"role": "system", "content": _PLANNING_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=400,
+                temperature=0.4,
+            ),
+            timeout=10.0,
+        )
+        reply = resp.choices[0].message.content.strip()
+    except Exception as exc:
+        log.warning("planning_gen_failed | %s", exc)
+        lines = ["شفت موادك، هذا اللي عندي:\n"]
+        lines += [f"• {l}" for l in inv_lines]
+        lines.append("\nأرسل رمز المادة اللي تبي تبدأ فيها.")
+        reply = "\n".join(lines)
+
+    # Store in conversation history
+    q = _HISTORY_CACHE.setdefault(chat_id, deque(maxlen=_HISTORY_MAX_TURNS))
+    q.append({"role": "user",      "content": text[:200]})
+    q.append({"role": "assistant", "content": reply[:400]})
+
+    await _send(http, chat_id, reply)
+    log.info("PLANNING | chat=%d | courses=%s | unresolved=%s",
+             chat_id, found_codes, unresolved)
+
+
+# ---------------------------------------------------------------------------
 # Message handler — two-layer routing
 # ---------------------------------------------------------------------------
 
@@ -520,7 +692,12 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     if text.startswith("/"):
         return
 
-    # ── Layer 1: Fast academic signal (skip classifier, go straight to retrieval) ─
+    # ── Layer 1: Planning queries — inventory-first, not retrieval-first ──────
+    if _is_planning_query(text):
+        await _handle_planning(http, chat_id, text)
+        return
+
+    # ── Layer 2: Fast academic signal (skip classifier, go straight to retrieval) ─
     if _has_academic_signal(text):
         await _handle_academic(http, chat_id, text)
         return

@@ -172,6 +172,11 @@ class FeedbackRequest(BaseModel):
     helpful:  bool
 
 
+class CourseInventoryRequest(BaseModel):
+    codes: list[str] = []   # explicit course codes (e.g. ["IT362", "MGT311"])
+    names: list[str] = []   # free-text course names to resolve via inst_courses
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -763,6 +768,163 @@ async def submit_feedback(session_id: str, req: FeedbackRequest):
         metadata={"event_id": req.event_id},
     ))
     return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Course inventory (used by planning handler in the bot)
+# ---------------------------------------------------------------------------
+
+_SOURCE_TYPE_LABELS = {
+    "exam":               "تجميعات اختبارات",
+    "study_plan":         "خطة دراسية",
+    "course_description": "محتوى المادة",
+    "upload":             "مواد طلابية",
+    "regulation":         "لوائح",
+    "telegram_export":    "مناقشات طلابية",
+}
+
+
+_NAME_STOPWORDS = {
+    "introduction", "intro", "principles", "fundamentals", "advanced",
+    "basic", "general", "special", "applied", "to", "of", "in", "and",
+    "the", "a", "an", "for",
+}
+
+
+def _name_search_candidates(name: str) -> list[str]:
+    """
+    Return a ranked list of search strings for ILIKE matching.
+    Handles British/American spelling variants and common abbreviations.
+    """
+    name_clean = name.strip()[:60]
+    # British → American normalizations that matter in course names
+    normalized = (name_clean
+                  .replace("Behaviour", "Behavior").replace("behaviour", "behavior")
+                  .replace("Organisation", "Organization").replace("organisation", "organization")
+                  .replace("Organise", "Organize").replace("organise", "organize"))
+    candidates = [name_clean]
+    if normalized != name_clean:
+        candidates.append(normalized)
+    # Significant words (skip stopwords, 5+ chars), longest first — fallback for
+    # cases like "Introduction to Operations Management" → "Operations"
+    sig = sorted(
+        [w for w in name_clean.lower().split()
+         if w.rstrip(".,") not in _NAME_STOPWORDS and len(w) >= 5],
+        key=len, reverse=True,
+    )
+    for word in sig[:3]:
+        word_norm = (word.replace("behaviour", "behavior")
+                        .replace("organisation", "organization"))
+        for w in {word, word_norm}:
+            if w not in candidates:
+                candidates.append(w)
+    return candidates
+
+
+@app.post("/v1/courses/inventory")
+async def course_inventory(req: CourseInventoryRequest):
+    """
+    Given course codes and/or free-text names, return what RUMMAN has for each.
+    Names are fuzzy-matched against inst_courses (name_en / name_ar) with
+    British/American spelling normalization and significant-word fallback.
+    Used by the bot's planning handler to show students what content is available.
+    """
+    async with httpx.AsyncClient(timeout=15) as http:
+
+        # ── Step 1: Resolve names → codes via inst_courses ────────────────────
+        resolved: dict[str, str] = {}  # name → code
+        for name in req.names[:8]:
+            for search_term in _name_search_candidates(name):
+                found = False
+                for col in ("name_en", "name_ar"):
+                    r = await http.get(
+                        f"{SUPABASE_URL}/rest/v1/inst_courses",
+                        headers=HEADERS,
+                        params={
+                            col:         f"ilike.*{search_term}*",
+                            "tenant_id": f"eq.{SEU_TENANT_ID}",
+                            "select":    "code,name_en,name_ar",
+                            "limit":     "1",
+                        },
+                    )
+                    if r.status_code == 200 and r.json():
+                        resolved[name] = r.json()[0]["code"]
+                        found = True
+                        break
+                if found:
+                    break  # resolved — stop trying more search terms for this name
+
+        # ── Step 2: Merge explicit codes + resolved names ─────────────────────
+        all_codes: list[str] = list({c.upper() for c in req.codes[:8]})
+        for code in resolved.values():
+            if code and code.upper() not in all_codes:
+                all_codes.append(code.upper())
+
+        if not all_codes:
+            return {
+                "inventory":        {},
+                "unresolved_names": req.names,
+            }
+
+        codes_param = ",".join(all_codes)
+
+        # ── Step 3: Fetch course metadata (name, catalog presence) ────────────
+        course_meta: dict[str, dict] = {}
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/inst_courses",
+            headers=HEADERS,
+            params={
+                "code":      f"in.({codes_param})",
+                "tenant_id": f"eq.{SEU_TENANT_ID}",
+                "select":    "code,name_en,name_ar",
+                "limit":     "20",
+            },
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                course_meta[row["code"]] = {
+                    "name_en": row.get("name_en") or "",
+                    "name_ar": row.get("name_ar") or "",
+                }
+
+        # ── Step 4: Count document_chunks per code ────────────────────────────
+        from collections import defaultdict
+        chunk_data: dict[str, dict] = defaultdict(lambda: {"count": 0, "source_types": set()})
+
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/document_chunks",
+            headers=HEADERS,
+            params={
+                "course_code": f"in.({codes_param})",
+                "select":      "course_code,source_type",
+                "limit":       "2000",
+            },
+        )
+        if r.status_code == 200:
+            for row in r.json():
+                code = row.get("course_code")
+                if code:
+                    chunk_data[code]["count"] += 1
+                    if row.get("source_type"):
+                        chunk_data[code]["source_types"].add(row["source_type"])
+
+        # ── Step 5: Build inventory ───────────────────────────────────────────
+        inventory: dict[str, dict] = {}
+        for code in all_codes:
+            meta   = course_meta.get(code, {})
+            chunks = chunk_data.get(code, {"count": 0, "source_types": set()})
+            src_types = sorted(chunks["source_types"])
+            inventory[code] = {
+                "name_en":     meta.get("name_en", ""),
+                "name_ar":     meta.get("name_ar", ""),
+                "in_catalog":  code in course_meta,
+                "chunk_count": chunks["count"],
+                "source_types": src_types,
+                "source_labels": [_SOURCE_TYPE_LABELS.get(s, s) for s in src_types],
+            }
+
+        unresolved = [n for n in req.names if n not in resolved]
+        return {"inventory": inventory, "unresolved_names": unresolved}
 
 
 # ---------------------------------------------------------------------------

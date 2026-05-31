@@ -151,20 +151,32 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
 
     rows = await query(http, f"""
         SELECT
-            SUM((metadata->>'synthesis_tokens')::int) AS synthesis_tokens,
-            COUNT(*) FILTER (WHERE event_type='synthesis') AS synthesis_calls
+            SUM((metadata->>'synthesis_tokens')::int)
+                FILTER (WHERE metadata->>'synthesis_model' LIKE 'gpt-4o-mini%') AS mini_tokens,
+            SUM((metadata->>'synthesis_tokens')::int)
+                FILTER (WHERE metadata->>'synthesis_model' LIKE 'gpt-4o%'
+                          AND metadata->>'synthesis_model' NOT LIKE 'gpt-4o-mini%') AS premium_tokens,
+            COUNT(*) FILTER (WHERE event_type='synthesis') AS synthesis_calls,
+            COUNT(*) FILTER (WHERE metadata->>'cache_hit' = 'true') AS cache_hits
         FROM learning_events
         WHERE occurred_at >= '{WEEK_AGO}'
     """)
     r = rows[0] if rows else {}
-    synth_tokens = int(r.get("synthesis_tokens") or 0)
-    synth_calls  = int(r.get("synthesis_calls") or 0)
-    # gpt-4o: ~$2.50/1M input + $10/1M output ≈ $6/1M blended (rough)
-    # intent calls (gpt-4o-mini): ~400 tokens each at $0.15/1M input
-    intent_cost = synth_calls * 400 * 0.15 / 1_000_000
-    synth_cost  = synth_tokens * 6.00 / 1_000_000
-    m["est_cost_usd"] = round(intent_cost + synth_cost, 4)
-    m["synth_calls"]  = synth_calls
+    mini_tokens    = int(r.get("mini_tokens") or 0)
+    premium_tokens = int(r.get("premium_tokens") or 0)
+    synth_calls    = int(r.get("synthesis_calls") or 0)
+    cache_hits     = int(r.get("cache_hits") or 0)
+    # gpt-4o-mini: ~$0.15/1M input + $0.60/1M output ≈ $0.30/1M blended
+    # gpt-4o:      ~$2.50/1M input + $10/1M output  ≈ $5.00/1M blended
+    # intent classification (gpt-4o-mini): ~400 tokens each
+    intent_cost  = synth_calls * 400 * 0.30 / 1_000_000
+    mini_cost    = mini_tokens    * 0.30 / 1_000_000
+    premium_cost = premium_tokens * 5.00 / 1_000_000
+    m["est_cost_usd"]   = round(intent_cost + mini_cost + premium_cost, 4)
+    m["synth_calls"]    = synth_calls
+    m["cache_hits"]     = cache_hits
+    m["mini_tokens"]    = mini_tokens
+    m["premium_tokens"] = premium_tokens
 
     # ── Corpus coverage ───────────────────────────────────────────────────────
 
@@ -177,6 +189,20 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     m["total_chunks"]       = int(r.get("total") or 0)
     m["embedded_chunks"]    = int(r.get("embedded") or 0)
     m["unattributed_chunks"]= int(r.get("unattributed") or 0)
+
+    # ── Course intelligence profiles ──────────────────────────────────────────
+
+    rows = await query(http, """
+        SELECT coverage_level, COUNT(*) AS n
+        FROM course_intelligence_profiles
+        GROUP BY coverage_level
+    """)
+    m["course_coverage"] = {r["coverage_level"]: int(r["n"]) for r in rows}
+
+    rows = await query(http, """
+        SELECT COUNT(*) AS n FROM exam_intelligence
+    """)
+    m["exam_signals"] = int(rows[0]["n"]) if rows else 0
 
     return m
 
@@ -212,12 +238,18 @@ def format_report(m: dict) -> str:
     zero_pct     = round(100 * zero / queries, 1) if queries > 0 else 0
     avg_lat      = m.get("avg_latency", 0)
     p95_lat      = m.get("p95_latency", 0)
-    synth_calls  = m.get("synth_calls", 0)
-    cost         = m.get("est_cost_usd", 0)
+    synth_calls   = m.get("synth_calls", 0)
+    cache_hits    = m.get("cache_hits", 0)
+    cache_pct     = round(100 * cache_hits / synth_calls, 1) if synth_calls > 0 else 0
+    cost          = m.get("est_cost_usd", 0)
+    mini_tokens   = m.get("mini_tokens", 0)
+    premium_tokens= m.get("premium_tokens", 0)
     lines.append(f"\n<b>PRODUCT</b>")
     lines.append(f"  Queries this week: {queries}  ({synth_calls} with synthesis)")
     lines.append(f"  Zero-result rate:  {zero_pct}%  ({zero}/{queries})")
+    lines.append(f"  Cache hit rate:    {cache_pct}%  ({cache_hits}/{synth_calls})")
     lines.append(f"  Latency:  avg {avg_lat}ms  |  p95 {p95_lat}ms")
+    lines.append(f"  Mini tokens: {mini_tokens:,}  |  Premium tokens: {premium_tokens:,}")
     lines.append(f"  Est. OpenAI cost:  ${cost}")
 
     # Zero by course
@@ -232,6 +264,22 @@ def format_report(m: dict) -> str:
     unatr  = m.get("unattributed_chunks", 0)
     unatr_pct = round(100 * unatr / total, 1) if total > 0 else 0
     lines.append(f"\n<b>CORPUS</b>  {total:,} chunks  |  {unatr:,} unattributed ({unatr_pct}%)")
+
+    # Course intelligence
+    cov = m.get("course_coverage", {})
+    exam_sigs = m.get("exam_signals", 0)
+    if cov:
+        strong   = cov.get("strong",   0)
+        moderate = cov.get("moderate", 0)
+        thin     = cov.get("thin",     0)
+        total_courses = sum(cov.values())
+        lines.append(
+            f"\n<b>COURSE INTELLIGENCE</b>  {total_courses} courses tracked  |  "
+            f"{exam_sigs} exam signal entries"
+        )
+        lines.append(
+            f"  Strong: {strong}  |  Moderate: {moderate}  |  Thin: {thin}"
+        )
 
     # Unmet queries
     unmet = m.get("unmet_queries", [])

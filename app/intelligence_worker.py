@@ -64,8 +64,8 @@ Rules:
 6. due_date: ISO YYYY-MM-DD only if a specific date is stated, else null.
 7. course_code: exact code if present (e.g. "IT484"), else null.
 
-Return ONLY a valid JSON array (no text outside JSON):
-[
+Return ONLY valid JSON in this exact format (no text outside JSON):
+{"items": [
   {
     "item_type": "deadline",
     "title": "Short title (max 80 chars)",
@@ -74,7 +74,8 @@ Return ONLY a valid JSON array (no text outside JSON):
     "due_date": "2026-06-01",
     "course_code": "IT484"
   }
-]\
+]}
+If nothing qualifies, return {"items": []}\
 """
 
 

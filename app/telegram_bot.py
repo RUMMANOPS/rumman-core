@@ -274,6 +274,10 @@ def _clean(text: str) -> str:
 # Session eviction
 # ---------------------------------------------------------------------------
 
+_CLASSIFY_CACHE_MAX = 5_000
+_HISTORY_CACHE_MAX  = 10_000  # users; each entry is a 6-turn deque (~12 short strings)
+
+
 def _evict_expired_sessions() -> None:
     now = time.monotonic()
     expired = [k for k, (_, exp) in _SESSION_CACHE.items() if exp < now]
@@ -283,6 +287,14 @@ def _evict_expired_sessions() -> None:
         evict_count = len(_USER_CACHE) // 5
         for k in list(_USER_CACHE.keys())[:evict_count]:
             del _USER_CACHE[k]
+    if len(_CLASSIFY_CACHE) > _CLASSIFY_CACHE_MAX:
+        evict_count = len(_CLASSIFY_CACHE) // 5
+        for k in list(_CLASSIFY_CACHE.keys())[:evict_count]:
+            del _CLASSIFY_CACHE[k]
+    if len(_HISTORY_CACHE) > _HISTORY_CACHE_MAX:
+        evict_count = len(_HISTORY_CACHE) // 5
+        for k in list(_HISTORY_CACHE.keys())[:evict_count]:
+            del _HISTORY_CACHE[k]
 
 
 # ---------------------------------------------------------------------------

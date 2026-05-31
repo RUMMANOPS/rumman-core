@@ -1114,6 +1114,14 @@ async def upsert_user_context(user_id: str, req: StudentContextRequest):
     return {"ok": True}
 
 
+@app.get("/v1/users/{user_id}/context")
+async def get_user_context(user_id: str):
+    """Return all non-expired context signals for a user (keyed by context_type)."""
+    async with httpx.AsyncClient(timeout=5) as http:
+        ctx = await _fetch_student_context(http, user_id)
+    return ctx
+
+
 # ---------------------------------------------------------------------------
 # Course inventory (used by planning handler in the bot)
 # ---------------------------------------------------------------------------

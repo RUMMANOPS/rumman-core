@@ -52,6 +52,7 @@ _USER_CACHE:    dict[int, str]               = {}
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}
 _ENROLLED:      dict[int, list[str]]         = {}
 _ENROLLED_CONFIRMED: set[int]               = set()  # chat_ids with explicit /mycourses confirmation
+_CONTEXT_RESTORE_ATTEMPTED: set[int]        = set()  # chat_ids for which DB restore was attempted this session
 _PROMPTED_FOR_COURSES: set[int]              = set()
 _HISTORY_MAX_TURNS = 6
 _HISTORY_CACHE: dict[int, deque]             = {}
@@ -964,8 +965,42 @@ async def _handle_meta(
         )
 
 
+async def _try_restore_enrollment(http: httpx.AsyncClient, chat_id: int, user_id: str) -> None:
+    """Re-hydrate _ENROLLED / _ENROLLED_CONFIRMED from DB after a bot restart.
+
+    Called at most once per chat_id per process lifetime (guarded by
+    _CONTEXT_RESTORE_ATTEMPTED). Only restores high-confidence (explicit /mycourses)
+    enrollments — inferred courses are intentionally not restored.
+    """
+    try:
+        r = await http.get(
+            f"{SEARCH_API_URL}/v1/users/{user_id}/context",
+            timeout=3,
+        )
+        if r.status_code != 200:
+            return
+        enrolled_ctx = r.json().get("enrolled_courses") or {}
+        codes = enrolled_ctx.get("context_value", {}).get("codes", [])
+        confidence = enrolled_ctx.get("confidence", "low")
+        if codes and confidence == "high":
+            _ENROLLED[chat_id] = codes
+            _ENROLLED_CONFIRMED.add(chat_id)
+            log.info("ENROLLMENT_RESTORED | chat=%d | courses=%s", chat_id, codes)
+    except Exception as exc:
+        log.debug("enrollment_restore_failed | chat=%d | %s", chat_id, exc)
+
+
 async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
     """Full retrieval + synthesis pipeline for academic queries."""
+    # Re-hydrate enrollment from DB on the first academic query per session.
+    # Prevents the clarification gate from misfiring for confirmed students after
+    # a bot restart (when in-memory sets are wiped but DB state is intact).
+    if chat_id not in _ENROLLED_CONFIRMED and chat_id not in _CONTEXT_RESTORE_ATTEMPTED:
+        _CONTEXT_RESTORE_ATTEMPTED.add(chat_id)
+        pre_uid = await _get_or_create_user(http, chat_id)
+        if pre_uid:
+            await _try_restore_enrollment(http, chat_id, pre_uid)
+
     # First-interaction quality gate: if the message has exam keywords but no course
     # code AND the student has no enrolled_courses context, ask before attempting
     # retrieval. One clarifying question beats a failed synthesis as a first impression.

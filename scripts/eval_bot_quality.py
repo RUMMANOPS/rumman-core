@@ -294,7 +294,10 @@ async def main():
             )
 
             # ── AFTER: 8 chunks × 800 chars + extracted_items ────────────────
-            intel_items_raw = await fetch_extracted_items(http, course_codes if course_codes else None)
+            # Only inject intel items when a course code is present — matches production
+            # search_api.py behavior (returns [] when course_codes is empty at line 293).
+            # Injecting all items without course filter drowns out relevant vector chunks.
+            intel_items_raw = await fetch_extracted_items(http, course_codes) if course_codes else []
             intel_chunks = [format_intel_item(item) for item in intel_items_raw]
 
             # Merge: intel items get priority (sort by similarity desc)

@@ -222,6 +222,33 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     """)
     m["msg_signals_current"] = int(rows[0]["n"]) if rows else 0
 
+    # ── Worker heartbeat health ───────────────────────────────────────────────
+
+    rows = await query(http, """
+        SELECT worker_id, service_name, status, last_seen_at,
+               EXTRACT(EPOCH FROM (NOW() - last_seen_at)) AS seconds_since
+        FROM worker_heartbeats
+        ORDER BY last_seen_at DESC
+    """)
+    stale_workers = []
+    healthy_workers = []
+    for r in rows:
+        age_min = float(r.get("seconds_since") or 0) / 60
+        if age_min > 30:
+            stale_workers.append((r["worker_id"], age_min))
+        else:
+            healthy_workers.append((r["worker_id"], r.get("status", "?")))
+    m["stale_workers"]   = stale_workers
+    m["healthy_workers"] = healthy_workers
+
+    # ── Stale backfill jobs (running but lease expired) ───────────────────────
+
+    rows = await query(http, """
+        SELECT COUNT(*) AS n FROM telegram_backfill_jobs
+        WHERE status = 'running' AND lease_expires_at < NOW()
+    """)
+    m["stale_backfill_jobs"] = int(rows[0]["n"]) if rows else 0
+
     return m
 
 
@@ -324,6 +351,21 @@ def format_report(m: dict) -> str:
         for q, n in unmet:
             q_short = q[:60] + "..." if len(q) > 60 else q
             lines.append(f"  {n}x — {q_short}")
+
+    # Worker health
+    stale   = m.get("stale_workers", [])
+    healthy = m.get("healthy_workers", [])
+    stale_bf = m.get("stale_backfill_jobs", 0)
+    lines.append("\n<b>WORKER HEALTH</b>")
+    if not stale and not stale_bf:
+        lines.append(f"  All {len(healthy)} workers healthy")
+    else:
+        for wid, age_min in stale:
+            lines.append(f"  STALE: {wid}  (last seen {age_min:.0f} min ago)")
+        for wid, status in healthy:
+            lines.append(f"  OK:    {wid}  ({status})")
+    if stale_bf:
+        lines.append(f"  WARN: {stale_bf} backfill job(s) stuck (expired lease)")
 
     return "\n".join(lines)
 

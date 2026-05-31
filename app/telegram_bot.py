@@ -728,9 +728,10 @@ async def _handle_planning(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     except Exception as exc:
         log.warning("inventory_check_failed | %s", exc)
 
-    # Persist discovered courses for this session and as inferred student context
+    # Persist discovered courses for this session and as inferred student context.
+    # Always update inferred courses — but never overwrite confirmed (/mycourses) enrollment.
     found_codes = list(inventory.keys())
-    if found_codes and chat_id not in _ENROLLED:
+    if found_codes and chat_id not in _ENROLLED_CONFIRMED:
         _ENROLLED[chat_id] = found_codes
         user_id = await _get_or_create_user(http, chat_id)
         if user_id:

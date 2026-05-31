@@ -271,15 +271,18 @@ async def enrich_cluster_label(ai: AsyncOpenAI, cluster: dict) -> dict:
     prompt = f"Student queries (all returned zero results):\n" + "\n".join(f"- {q}" for q in sample)
 
     try:
-        resp = await ai.chat.completions.create(
-            model=MODEL,
-            temperature=0.2,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": LABEL_SYSTEM},
-                {"role": "user",   "content": prompt},
-            ],
-            max_tokens=150,
+        resp = await asyncio.wait_for(
+            ai.chat.completions.create(
+                model=MODEL,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": LABEL_SYSTEM},
+                    {"role": "user",   "content": prompt},
+                ],
+                max_tokens=150,
+            ),
+            timeout=30,
         )
         parsed = json.loads(resp.choices[0].message.content)
         cluster["label"]       = parsed.get("label", cluster["label"])

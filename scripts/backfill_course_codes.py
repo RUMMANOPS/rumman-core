@@ -120,11 +120,14 @@ async def llm_infer_course(ai: AsyncOpenAI, filename: str, snippet: str) -> Opti
         f"No explanation."
     )
     try:
-        resp = await ai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=12,
-            temperature=0,
+        resp = await asyncio.wait_for(
+            ai.chat.completions.create(
+                model="gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=12,
+                temperature=0,
+            ),
+            timeout=30,
         )
         raw = resp.choices[0].message.content.strip().upper()
         if raw == "NULL" or not raw:

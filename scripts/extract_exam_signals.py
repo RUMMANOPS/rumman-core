@@ -122,6 +122,7 @@ def extract_topics_for_type(course_code: str, exam_type: str, chunks: list[dict]
             ],
             max_tokens=200,
             temperature=0.1,
+            timeout=30,
         )
         raw = resp.choices[0].message.content.strip()
         data = json.loads(raw)

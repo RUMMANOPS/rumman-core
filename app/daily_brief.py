@@ -331,14 +331,17 @@ async def process_chat(
             return {"chat_name": chat_name, "items": [], "error": "run_create_failed"}
 
     try:
-        response = await ai.chat.completions.create(
-            model=MODEL,
-            temperature=0.1,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": user_content},
-            ],
+        response = await asyncio.wait_for(
+            ai.chat.completions.create(
+                model=MODEL,
+                temperature=0.1,
+                response_format={"type": "json_object"},
+                messages=[
+                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+            ),
+            timeout=120,
         )
 
         raw_output = response.choices[0].message.content

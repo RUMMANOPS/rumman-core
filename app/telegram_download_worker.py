@@ -61,6 +61,11 @@ def log(event: str, **kwargs):
     print(" | ".join(parts), flush=True)
 
 
+def _sanitize_text(text: str) -> str:
+    """Strip characters PostgreSQL cannot store in text columns (null bytes, etc.)."""
+    return text.replace("\x00", "")
+
+
 def detect_course_code(text: str) -> Optional[str]:
     if not text:
         return None
@@ -390,6 +395,7 @@ async def handle_telegram_media(client: TelegramClient, ai: AsyncOpenAI,
             else:
                 raise RuntimeError(f"Unsupported media type: {file_path}")
 
+            extracted_text = _sanitize_text(extracted_text)
             language     = detect_language(extracted_text)
             char_count   = len(extracted_text)
             content_hash = hashlib.sha256(extracted_text.encode()).hexdigest()

@@ -944,9 +944,13 @@ def health():
 async def search(req: SearchRequest):
     t_start = time.monotonic()
 
-    results, all_raw, understanding, params_log = await _run_retrieval(
-        req.query, req.limit, req.course_code, req.source_type
-    )
+    try:
+        results, all_raw, understanding, params_log = await _run_retrieval(
+            req.query, req.limit, req.course_code, req.source_type
+        )
+    except Exception as exc:
+        log.error("retrieval_error | %s | query=%.60s", exc, req.query)
+        raise HTTPException(status_code=503, detail="retrieval temporarily unavailable")
     intent    = understanding.intent
     top_sim   = results[0].get("similarity") if results else None
     grounded  = len(results) > 0
@@ -1008,9 +1012,14 @@ async def synthesize(req: SynthesizeRequest):
     """
     t_start = time.monotonic()
 
-    results, all_raw, understanding, params_log = await _run_retrieval(
-        req.query, req.limit
-    )
+    try:
+        results, all_raw, understanding, params_log = await _run_retrieval(
+            req.query, req.limit
+        )
+    except Exception as exc:
+        log.error("retrieval_error | %s | query=%.60s", exc, req.query)
+        raise HTTPException(status_code=503, detail="retrieval temporarily unavailable")
+
     intent   = understanding.intent
     top_sim  = results[0].get("similarity") if results else None
     grounded = len(results) > 0

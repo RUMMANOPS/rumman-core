@@ -849,6 +849,7 @@ async def _fetch_course_intelligence(
         params: dict = {
             "course_code": f"eq.{course_code}",
             "tenant_id":   f"eq.{SEU_TENANT_ID}",
+            "confidence":  "in.(medium,high)",   # low = too few chunks, attribution noise risk
             "select":      "exam_type,top_topics,confidence",
             "limit":       "4",
         }

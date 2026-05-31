@@ -241,10 +241,10 @@ Telegram message: "كيف أكمل بكالوريوس CS"
 |---|---|---|
 | listener | ✅ Running | — |
 | backfill | ✅ Running | SESSION BUG (shared session) |
-| media | ✅ Running | SESSION BUG + null byte bug |
+| media | ✅ Running | SESSION BUG (shared session) — null byte bug fixed in fd2ebae |
 | embed | ✅ Running | — |
-| search | ✅ Running | SYNTHESIZE_ERROR 500 (01:48-02:05 UTC, unresolved) |
-| bot | ✅ Running | — |
+| search | ✅ Running | Retrieval 500→503 fixed fd2ebae; root cause was OpenAI outage |
+| bot | ✅ Running | Routing fix 4d43657: greetings no longer reach search |
 | intelligence | ⛔ Gated | INTELLIGENCE_WORKER_ENABLED not set |
 | attribution | ⛔ Gated | ATTRIBUTION_WORKER_ENABLED not set |
 
@@ -298,18 +298,19 @@ Telegram message: "كيف أكمل بكالوريوس CS"
 ### High
 | Risk | Description | Impact | Fix |
 |---|---|---|---|
-| **Media null byte bug** | Some PDFs contain ` ` characters. PostgreSQL rejects them (error 22P05). Extraction fails silently. | Some PDFs never enter corpus | Strip null bytes before INSERT in `telegram_download_worker.py` |
-| **SYNTHESIZE_ERROR 500** | ~8 synthesis failures on 2026-05-31 01:48-02:05 UTC. Root cause unknown. | Students get error responses | Need search API logs from that window |
+| ~~**Media null byte bug**~~ | ~~PDFs with null bytes fail silently~~ | ~~Extraction fails~~ | ✅ Fixed fd2ebae |
+| ~~**SYNTHESIZE_ERROR 500**~~ | ~~OpenAI outage → unhandled exception~~ | ~~500s to students~~ | ✅ Fixed fd2ebae — 503 instead |
+| ~~**Greeting routing bug**~~ | ~~Classifier fallback sent greetings to search~~ | ~~Inflated zero-results~~ | ✅ Fixed 4d43657 |
 | **Intelligence layer off** | `intelligence_items` = 0. No assignment/deadline extraction. | Core Phase 2 value missing | Set `INTELLIGENCE_WORKER_ENABLED=true` on Railway |
 
 ### Medium
 | Risk | Description | Impact | Fix |
 |---|---|---|---|
-| **Audio job stuck** | 1 audio_transcribe job stuck in `processing` since 2026-05-28 | Stuck forever, backlog illusion | `UPDATE processing_jobs SET status='pending', retry_count=0 WHERE status='processing' AND job_type='audio_transcribe'` |
-| **No heartbeat for backfill/media** | Only embed_worker + attribution_worker write to `worker_heartbeats` | Can't detect silent crashes | Add heartbeat writes to backfill + media workers |
+| ~~**Audio job stuck**~~ | ~~1 audio_transcribe stuck in processing~~ | ~~Backlog illusion~~ | ✅ Reset in this session |
+| ~~**No heartbeat for backfill/media**~~ | ~~Can't detect silent crashes~~ | ~~Blind to crashes~~ | ✅ Fixed 226e9c6 |
+| ~~**30 orphaned job types**~~ | ~~Legacy message_ingested etc.~~ | ~~Monitoring noise~~ | ✅ Deleted in this session |
 | **18K media queue** | 18,355 telegram_media jobs growing as backfill adds new chats | Media never caught up if worker is slow | Monitor drain rate; consider parallel media workers |
-| **Zero-result rate 43%** | Nearly half of queries return nothing | Poor student experience | Run batch_ingest_seu.py for 93 official docs; run qa_mining_worker.py |
-| **30 orphaned job types** | `message_ingested` and other legacy jobs clog processing_jobs | Noise in monitoring | DELETE WHERE job_type NOT IN ('telegram_media','audio_transcribe','embed_chunk','telegram_gap_fill','pdf_extract') AND status='completed' |
+| **Zero-result rate** | MGT425 and Islamic finance queries return nothing; greetings routing fixed | Poor student experience | Run qa_mining_worker.py to mine Q&A from 72K messages |
 
 ### Low
 | Risk | Description | Impact | Fix |

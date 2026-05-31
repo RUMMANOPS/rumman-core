@@ -945,10 +945,11 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     reply    = _format_synthesis(data, query=text)
     grounded = data.get("grounded", False)
 
-    if grounded:
+    answer_text = (data.get("answer") or "").strip()
+    if grounded and answer_text and not data.get("synthesis_failed"):
         q = _HISTORY_CACHE.setdefault(chat_id, deque(maxlen=_HISTORY_MAX_TURNS))
         q.append({"role": "user",      "content": text})
-        q.append({"role": "assistant", "content": (data.get("answer") or "")[:400]})
+        q.append({"role": "assistant", "content": answer_text[:400]})
 
     if grounded and chat_id not in _PROMPTED_FOR_COURSES and chat_id not in _ENROLLED:
         _PROMPTED_FOR_COURSES.add(chat_id)

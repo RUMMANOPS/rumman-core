@@ -1011,8 +1011,8 @@ async def create_or_resume_session(req: SessionCreateRequest):
                         "active_course_code": s.get("active_course_code"),
                         "turn_count":        s.get("turn_count", 0),
                     }
-            except Exception:
-                pass
+            except Exception as exc:
+                log.warning("session_timestamp_parse_failed | session=%s | %s", s.get("id"), exc)
 
         r = await http.post(
             f"{SUPABASE_URL}/rest/v1/rumman_sessions",

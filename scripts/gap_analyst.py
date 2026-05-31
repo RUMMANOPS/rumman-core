@@ -171,6 +171,17 @@ def _cluster_by_course_and_topic(events: list[dict]) -> dict[str, dict]:
         if not query:
             continue
 
+        # Skip classifier artifacts that should never reach search:
+        # greetings, identity questions, meta queries without academic content.
+        intent = (ev.get("intent_type") or "").lower()
+        if intent in ("greeting", "ack", "identity_bot", "identity_user", "off_topic"):
+            continue
+        # Also skip if the raw query looks like a pure greeting/ack (classifier may have mislabeled)
+        if len(query) < 15 and not re.search(r'[A-Z]{2,6}\d{3}', query.upper()):
+            words = _normalize_query(query).split()
+            if not any(w in {"exam", "quiz", "اختبار", "امتحان", "ملخص", "شرح", "مادة"} for w in words):
+                continue
+
         codes = ev.get("course_codes") or _extract_course_codes(query)
         sim   = float(ev.get("top_similarity") or 0.0)
 

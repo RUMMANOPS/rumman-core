@@ -132,6 +132,10 @@ Each source chunk is tagged with an authority tier:
 You may receive a system context block titled "سياق المادة والطالب". Use it to:
   - Set accurate expectations about what RUMMAN knows for this course (coverage level, content types).
   - Surface recurring exam topics (المواضيع المتكررة) as strong signals when answering exam-related queries.
+  - Weight "تأكيدات الاختبار من الطلاب" (exam_emphasis) and "ملاحظة الدكتور" (professor_note) signals highly —
+    they reflect what students actually reported as important from their group chats.
+  - Use "مواضيع صعبة" (difficulty) signals to emphasize topics students commonly struggle with.
+  - Signals tagged "(الفصل الحالي)" are from the current semester and are more reliable than historic ones.
   - Do NOT fabricate information from this block — it is meta-context, not source content.
 
 Grounding rules:
@@ -766,6 +770,7 @@ def _build_context_block(
     ctx: dict,
     course_profile: dict | None = None,
     exam_signals: list[dict] | None = None,
+    msg_signals: list[dict] | None = None,
 ) -> str | None:
     """Format student context + corpus intelligence into a system-prompt injection block."""
     parts: list[str] = []
@@ -817,9 +822,61 @@ def _build_context_block(
                 }.get(etype, "الاختبارات")
                 parts.append(f"المواضيع المتكررة في {label}: {', '.join(topics[:6])}")
 
+    # Message intelligence signals
+    if msg_signals:
+        _SIGNAL_LABELS = {
+            "exam_emphasis":      "تأكيدات الاختبار من الطلاب",
+            "difficulty":         "مواضيع صعبة",
+            "professor_note":     "ملاحظة الدكتور",
+            "resource_rec":       "مصدر موصى به",
+            "confusion_cluster":  "سؤال متكرر",
+        }
+        # Current-semester signals first, then by source_count descending
+        current  = [s for s in msg_signals if s.get("is_current_semester")]
+        historic = [s for s in msg_signals if not s.get("is_current_semester")]
+        for sig in (current + historic)[:3]:
+            stype   = sig.get("signal_type", "")
+            content = (sig.get("signal_content") or "").strip()
+            if not content:
+                continue
+            label = _SIGNAL_LABELS.get(stype, stype)
+            src   = sig.get("source_count", 1)
+            semester_tag = " (الفصل الحالي)" if sig.get("is_current_semester") else ""
+            parts.append(f"{label}{semester_tag} ({src} رسالة): {content}")
+
     if not parts:
         return None
     return "سياق المادة والطالب:\n" + "\n".join(parts)
+
+
+async def _fetch_message_signals(
+    http: httpx.AsyncClient,
+    course_code: str,
+    signal_types: list[str] | None = None,
+) -> list[dict]:
+    """Fetch top message signals for a course, current semester first."""
+    try:
+        params: dict = {
+            "course_code": f"eq.{course_code}",
+            "tenant_id":   f"eq.{SEU_TENANT_ID}",
+            "confidence":  "gte.0.70",
+            "select":      "signal_type,signal_content,source_count,is_current_semester,semester_hint",
+            "order":       "is_current_semester.desc,source_count.desc",
+            "limit":       "6",
+        }
+        if signal_types:
+            params["signal_type"] = f"in.({','.join(signal_types)})"
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/message_signals",
+            headers=HEADERS,
+            params=params,
+            timeout=2,
+        )
+        if r.status_code == 200:
+            return r.json()
+    except Exception:
+        pass
+    return []
 
 
 async def _fetch_course_intelligence(
@@ -1367,32 +1424,42 @@ async def synthesize(req: SynthesizeRequest):
             ))
             return {**cached, "latency_ms": latency, "cache_hit": True}
 
-    # Fetch student context + course intelligence in parallel.
+    # Fetch student context + course intelligence + message signals in parallel.
     # All reads are fire-and-forget-safe; silently skipped on timeout/error.
     student_context_block: str | None = None
     async with httpx.AsyncClient(timeout=3) as ctx_http:
         ctx: dict = {}
         course_profile: dict | None = None
         exam_signals: list[dict] = []
+        msg_signals: list[dict] = []
 
         fetches = []
+        fetch_keys = []
         if req.user_id:
             fetches.append(_fetch_student_context(ctx_http, req.user_id))
+            fetch_keys.append("student_ctx")
         if primary_course:
             fetches.append(_fetch_course_intelligence(ctx_http, primary_course, exam_type))
+            fetch_keys.append("course_intel")
+            fetches.append(_fetch_message_signals(
+                ctx_http, primary_course,
+                signal_types=["exam_emphasis", "difficulty", "professor_note"],
+            ))
+            fetch_keys.append("msg_signals")
 
         if fetches:
             results_ctx = await asyncio.gather(*fetches, return_exceptions=True)
-            idx = 0
-            if req.user_id:
-                if not isinstance(results_ctx[idx], Exception):
-                    ctx = results_ctx[idx]
-                idx += 1
-            if primary_course:
-                if not isinstance(results_ctx[idx], Exception):
-                    course_profile, exam_signals = results_ctx[idx]
+            for key, result in zip(fetch_keys, results_ctx):
+                if isinstance(result, Exception):
+                    continue
+                if key == "student_ctx":
+                    ctx = result
+                elif key == "course_intel":
+                    course_profile, exam_signals = result
+                elif key == "msg_signals":
+                    msg_signals = result
 
-    student_context_block = _build_context_block(ctx, course_profile, exam_signals)
+    student_context_block = _build_context_block(ctx, course_profile, exam_signals, msg_signals)
 
     # Select model based on intent complexity — comparison/low-confidence get gpt-4o,
     # all other factual/exam queries get gpt-4o-mini (~75% cheaper).

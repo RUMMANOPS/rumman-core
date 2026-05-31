@@ -80,6 +80,15 @@ _ACADEMIC_KEYWORDS = {
     "summary", "notes", "deadline",
 }
 
+# Keywords that strongly signal an exam query but say nothing about which course.
+# When these appear without a course code and the student has no enrolled_courses context,
+# we ask for the course before attempting retrieval — saves one failed synthesis call
+# and converts a bad first impression into a directed interaction.
+_EXAM_KEYWORDS = {
+    "فاينل", "فينال", "ميدترم", "final", "midterm",
+    "اختبار", "امتحان", "تجميع", "تجميعات",
+}
+
 _COURSE_NUDGE = (
     "\n\n💡 <i>لتحسين إجاباتي لموادك تحديداً، أرسل:\n"
     "<code>/mycourses IT362 CS251 MGT311</code>\n"
@@ -287,6 +296,18 @@ async def _tg(http: httpx.AsyncClient, method: str, **kwargs) -> dict:
 
 async def _typing(http: httpx.AsyncClient, chat_id: int) -> None:
     await _tg(http, "sendChatAction", chat_id=chat_id, action="typing")
+
+
+async def _typing_keepalive(http: httpx.AsyncClient, chat_id: int, stop_event: asyncio.Event) -> None:
+    """Re-send typing indicator every 4s until stop_event is set.
+    Telegram typing indicators expire after ~5s — without this, the chat appears
+    frozen during the 5-8s synthesis window, which users read as a crash."""
+    while not stop_event.is_set():
+        try:
+            await asyncio.wait_for(stop_event.wait(), timeout=4.0)
+        except asyncio.TimeoutError:
+            if not stop_event.is_set():
+                await _tg(http, "sendChatAction", chat_id=chat_id, action="typing")
 
 
 async def _send(
@@ -851,8 +872,23 @@ async def _handle_meta(
 
 async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
     """Full retrieval + synthesis pipeline for academic queries."""
+    # First-interaction quality gate: if the message has exam keywords but no course
+    # code AND the student has no enrolled_courses context, ask before attempting
+    # retrieval. One clarifying question beats a failed synthesis as a first impression.
+    has_course_code   = bool(_COURSE_CODE_RE.search(text))
+    has_exam_keyword  = any(kw in text.lower() for kw in _EXAM_KEYWORDS)
+    has_enrolled      = bool(_ENROLLED.get(chat_id))
+    if has_exam_keyword and not has_course_code and not has_enrolled:
+        await _send(http, chat_id,
+            "أي مادة تقصد؟ 📚\n\n"
+            "اذكر رمز المادة مثل <code>IT362</code> أو <code>MGT311</code>\n"
+            "وأعطيك أفضل نتيجة."
+        )
+        log.info("CLARIFY_COURSE | chat=%d | q=%.60s", chat_id, text)
+        return
+
     query = text
-    if not _COURSE_CODE_RE.search(text) and chat_id in _ENROLLED and _ENROLLED[chat_id]:
+    if not has_course_code and has_enrolled:
         enrolled_str = " ".join(_ENROLLED[chat_id])
         query = f"{text} (موادي: {enrolled_str})"
 
@@ -863,7 +899,18 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     session_id = await _get_or_create_session(http, chat_id, user_id) if user_id else None
     history    = list(_HISTORY_CACHE[chat_id]) if chat_id in _HISTORY_CACHE else None
 
-    data = await _synthesize(http, query, user_id, session_id, history)
+    # Keep the Telegram "typing..." indicator alive during synthesis.
+    # Without this, the indicator expires after ~5s and the chat looks frozen.
+    # Cache hits return instantly so the keepalive exits immediately.
+    _stop_typing = asyncio.Event()
+    _typing_task = asyncio.create_task(_typing_keepalive(http, chat_id, _stop_typing))
+
+    try:
+        data = await _synthesize(http, query, user_id, session_id, history)
+    finally:
+        _stop_typing.set()
+        _typing_task.cancel()
+
     if data is None:
         await _send(http, chat_id, _ERROR)
         return

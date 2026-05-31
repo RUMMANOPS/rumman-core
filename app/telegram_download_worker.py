@@ -466,11 +466,22 @@ async def main():
             log("DOWNLOAD_WORKER_READY", user_id=me.id)
 
             async with httpx.AsyncClient(timeout=120) as http:
+                try:
+                    from heartbeat import Heartbeat
+                    hb = Heartbeat(http, worker_id="media_worker", service_name="media", interval_s=30)
+                except Exception:
+                    hb = None
+
                 while True:
                     jobs = await get_pending_jobs(http)
                     if not jobs:
+                        if hb:
+                            await hb.beat(status="idle")
                         await asyncio.sleep(SLEEP_SECONDS)
                         continue
+
+                    if hb:
+                        await hb.beat(status="running")
 
                     log("JOBS_FETCHED", count=len(jobs))
 

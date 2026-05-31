@@ -757,6 +757,12 @@ async def main():
         await discover_missing_jobs(http)
         await release_stale_gap_fill_jobs(http)
 
+        try:
+            from heartbeat import Heartbeat
+            hb = Heartbeat(http, worker_id="backfill_worker", service_name="backfill", interval_s=30)
+        except Exception:
+            hb = None
+
         while True:
             client = TelegramClient(
                 StringSession(_BACKFILL_SESSION),
@@ -781,6 +787,9 @@ async def main():
                     print("ENTITY_CACHE_TIMEOUT | continuing with partial cache", flush=True)
 
                 while True:
+                    if hb:
+                        await hb.beat(status="running")
+
                     # ── Priority 1: gap-fill jobs (repair missed live-listener messages) ──────
                     gap_job = await claim_gap_fill_job(http)
                     if gap_job:
@@ -802,6 +811,8 @@ async def main():
                     job = await claim_job(http)
 
                     if not job:
+                        if hb:
+                            await hb.beat(status="idle", force=True)
                         await asyncio.sleep(NO_JOBS_SLEEP_SECONDS)
                         continue
 

@@ -552,10 +552,12 @@ async def _synthesize_answer(
     conversation_history: list[dict] | None = None,
     model: str | None = None,
     max_tokens: int = 400,
+    student_context_block: str | None = None,
 ) -> tuple[str, int]:
     """
     Synthesize a grounded answer from chunks.
     conversation_history: alternating user/assistant turns from the current session (last 3).
+    student_context_block: optional context primer injected after the system prompt.
     Returns (answer_text, total_tokens_used).
     Raises asyncio.TimeoutError on timeout — caller handles fallback.
     """
@@ -576,6 +578,11 @@ async def _synthesize_answer(
     )
 
     messages: list[dict] = [{"role": "system", "content": _SYNTHESIS_SYSTEM}]
+
+    # Inject student context (enrolled courses, active focus) before conversation history.
+    # Keeps the model grounded to what we know about this specific student.
+    if student_context_block:
+        messages.append({"role": "system", "content": student_context_block})
 
     # Inject last N turns so the model can resolve pronouns and follow-up questions.
     # Truncate each turn to 400 chars to keep context cost bounded.
@@ -651,6 +658,77 @@ async def _log_event(
             )
     except Exception as exc:
         log.warning("learning_event write failed (non-fatal): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Student context — read/write helpers
+# ---------------------------------------------------------------------------
+
+async def _fetch_student_context(http: httpx.AsyncClient, user_id: str) -> dict:
+    """Return dict of context_type → row for non-expired context signals."""
+    try:
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/student_context",
+            headers=HEADERS,
+            params={
+                "user_id": f"eq.{user_id}",
+                "select":  "context_type,context_value,confidence,source",
+                "or":      "(expires_at.is.null,expires_at.gt.now())",
+                "limit":   "10",
+            },
+            timeout=3,
+        )
+        if r.status_code == 200:
+            return {row["context_type"]: row for row in r.json()}
+    except Exception:
+        pass
+    return {}
+
+
+async def _save_active_focus(
+    user_id: str,
+    course_code: str,
+    exam_type: str | None,
+) -> None:
+    """Fire-and-forget: persist the course the student just queried about."""
+    from datetime import datetime, timezone, timedelta
+    try:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=7)).isoformat()
+        async with httpx.AsyncClient(timeout=4) as http:
+            await http.post(
+                f"{SUPABASE_URL}/rest/v1/student_context",
+                headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+                params={"on_conflict": "user_id,context_type"},
+                json={
+                    "user_id":        user_id,
+                    "tenant_id":      SEU_TENANT_ID,
+                    "context_type":   "active_focus",
+                    "context_value":  {"course_code": course_code, "exam_type": exam_type},
+                    "confidence":     "low",
+                    "source":         "inferred",
+                    "observed_count": 1,
+                    "expires_at":     expires_at,
+                },
+            )
+    except Exception:
+        pass
+
+
+def _build_context_block(ctx: dict) -> str | None:
+    """Format student context signals into a system-prompt injection block."""
+    parts: list[str] = []
+    enrolled = (ctx.get("enrolled_courses") or {}).get("context_value", {}).get("codes", [])
+    if enrolled:
+        parts.append(f"الطالب مسجل في: {', '.join(enrolled)}")
+    focus = (ctx.get("active_focus") or {}).get("context_value", {})
+    if focus.get("course_code"):
+        line = f"المادة الحالية: {focus['course_code']}"
+        if focus.get("exam_type"):
+            line += f" ({focus['exam_type']})"
+        parts.append(line)
+    if not parts:
+        return None
+    return "سياق الطالب:\n" + "\n".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -785,6 +863,52 @@ async def submit_feedback(session_id: str, req: FeedbackRequest):
         session_id=session_id,
         metadata={"event_id": req.event_id},
     ))
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# Student context (persistent memory for enrolled courses and focus)
+# ---------------------------------------------------------------------------
+
+class StudentContextRequest(BaseModel):
+    context_type:  str
+    context_value: dict
+    confidence:    str = "low"   # high | medium | low
+    source:        str = "inferred"  # explicit | inferred | confirmed
+
+
+@app.post("/v1/users/{user_id}/context")
+async def upsert_user_context(user_id: str, req: StudentContextRequest):
+    """
+    Persist a student context signal. High-confidence writes come from explicit
+    commands (/mycourses); low/medium come from behavioral inference.
+    """
+    from datetime import datetime, timezone, timedelta
+    ttl_days: dict[str, int | None] = {"high": None, "medium": 30, "low": 7}
+    ttl = ttl_days.get(req.confidence)
+    expires_at = None
+    if ttl:
+        expires_at = (datetime.now(timezone.utc) + timedelta(days=ttl)).isoformat()
+
+    async with httpx.AsyncClient(timeout=10) as http:
+        r = await http.post(
+            f"{SUPABASE_URL}/rest/v1/student_context",
+            headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=minimal"},
+            params={"on_conflict": "user_id,context_type"},
+            json={
+                "user_id":        user_id,
+                "tenant_id":      SEU_TENANT_ID,
+                "context_type":   req.context_type,
+                "context_value":  req.context_value,
+                "confidence":     req.confidence,
+                "source":         req.source,
+                "observed_count": 1,
+                "last_seen_at":   "now()",
+                "expires_at":     expires_at,
+            },
+        )
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail="context write failed")
     return {"ok": True}
 
 
@@ -1046,6 +1170,14 @@ async def synthesize(req: SynthesizeRequest):
     synthesis_tokens = 0
     synthesis_failed = False
 
+    # Fetch student context (enrolled courses, active focus) to inject as synthesis primer.
+    # One fast Supabase read; silently skipped if user_id is absent or DB is slow.
+    student_context_block: str | None = None
+    if req.user_id:
+        async with httpx.AsyncClient(timeout=3) as ctx_http:
+            ctx = await _fetch_student_context(ctx_http, req.user_id)
+        student_context_block = _build_context_block(ctx)
+
     # Select model based on intent complexity — comparison/low-confidence get gpt-4o,
     # all other factual/exam queries get gpt-4o-mini (~75% cheaper).
     synth_model, synth_max_tokens = _select_synthesis_model(
@@ -1058,6 +1190,7 @@ async def synthesize(req: SynthesizeRequest):
             answer, synthesis_tokens = await _synthesize_answer(
                 req.query, results, req.conversation_history,
                 model=synth_model, max_tokens=synth_max_tokens,
+                student_context_block=student_context_block,
             )
         except asyncio.TimeoutError:
             log.warning("synthesis_timeout | query=%.60s", req.query)
@@ -1071,6 +1204,13 @@ async def synthesize(req: SynthesizeRequest):
     if req.session_id and intent and intent.course_codes:
         asyncio.create_task(_patch_session_focus(
             req.session_id, intent.course_codes[0], intent.exam_type,
+        ))
+
+    # Save active focus (what course the student just asked about) as inferred context.
+    # Fire-and-forget — never blocks the response.
+    if req.user_id and grounded and intent and intent.course_codes:
+        asyncio.create_task(_save_active_focus(
+            req.user_id, intent.course_codes[0], intent.exam_type,
         ))
 
     event_type = "zero_result" if not grounded else "synthesis"

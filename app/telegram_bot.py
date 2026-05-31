@@ -495,6 +495,23 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
             "لتغيير الموادك، أرسل الأمر مرة ثانية مع الأكواد الجديدة."
         )
         log.info("MYCOURSES_SET | chat=%d | courses=%s", chat_id, codes)
+
+        # Persist explicitly to student_context (survives bot restarts)
+        user_id = await _get_or_create_user(http, chat_id)
+        if user_id:
+            try:
+                await http.post(
+                    f"{SEARCH_API_URL}/v1/users/{user_id}/context",
+                    json={
+                        "context_type":  "enrolled_courses",
+                        "context_value": {"codes": codes},
+                        "confidence":    "high",
+                        "source":        "explicit",
+                    },
+                    timeout=5,
+                )
+            except Exception as exc:
+                log.debug("mycourses_context_persist_failed | %s", exc)
     else:
         enrolled = _ENROLLED.get(chat_id, [])
         if enrolled:
@@ -611,10 +628,25 @@ async def _handle_planning(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     except Exception as exc:
         log.warning("inventory_check_failed | %s", exc)
 
-    # Persist discovered courses for session context
+    # Persist discovered courses for this session and as inferred student context
     found_codes = list(inventory.keys())
     if found_codes and chat_id not in _ENROLLED:
         _ENROLLED[chat_id] = found_codes
+        user_id = await _get_or_create_user(http, chat_id)
+        if user_id:
+            try:
+                await http.post(
+                    f"{SEARCH_API_URL}/v1/users/{user_id}/context",
+                    json={
+                        "context_type":  "enrolled_courses",
+                        "context_value": {"codes": found_codes},
+                        "confidence":    "low",
+                        "source":        "inferred",
+                    },
+                    timeout=5,
+                )
+            except Exception:
+                pass
 
     # ── No courses resolved — ask for codes ───────────────────────────────
     if not inventory and not codes:

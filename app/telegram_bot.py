@@ -57,6 +57,17 @@ _HISTORY_CACHE: dict[int, deque]             = {}
 
 _COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
 
+# Fast pre-filter — obvious greetings/acks that never need the LLM classifier.
+# Caught before classify_message() so a classifier outage can't route them to search.
+_GREETING_RE = re.compile(
+    r'^(اهل[يا]ن?|مرحب[اه]?|هلا+|يهلا|السلام عليك[مه]?|صباح الخير|مساء الخير|ابر|هاي|hi+|hello|hey+)[\W\s]*$',
+    re.IGNORECASE | re.UNICODE,
+)
+_ACK_RE = re.compile(
+    r'^(شكر[اً]?|تمام|ماشي|اوك|ok+|باي|bye|🙏|👍|✅|حسنا|ثانكس|thanks?|تم)[\W\s]*$',
+    re.IGNORECASE | re.UNICODE,
+)
+
 _ACADEMIC_KEYWORDS = {
     "اختبار", "امتحان", "ميدترم", "فاينل", "فينال", "كويز",
     "ملخص", "ملخصات", "تجميع", "تجميعات",
@@ -227,8 +238,11 @@ async def _classify_message(text: str) -> str:
         }:
             result = "academic"
     except Exception as exc:
-        log.debug("classify_failed | %s — defaulting to academic", exc)
-        result = "academic"
+        log.debug("classify_failed | %s — fallback heuristic", exc)
+        # On classifier failure: very short messages with no academic signal are
+        # almost certainly greetings/acks, not academic queries. Avoid flooding
+        # search with noise when OpenAI is temporarily unavailable.
+        result = "greeting" if len(text) < 25 else "academic"
 
     _CLASSIFY_CACHE[key] = result
     return result
@@ -702,7 +716,15 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         await _handle_academic(http, chat_id, text)
         return
 
-    # ── Layer 2: LLM classifier for everything else ─────────────────────────
+    # ── Layer 2: Fast regex pre-filter (no LLM cost, robust to OpenAI outages) ──
+    if _GREETING_RE.match(text):
+        await _send(http, chat_id, _WELCOME)
+        return
+    if _ACK_RE.match(text):
+        await _send(http, chat_id, "على الرحب! اسألني عن أي مادة أو اختبار.")
+        return
+
+    # ── Layer 3: LLM classifier for everything else ─────────────────────────
     category = await _classify_message(text)
     log.info("CLASSIFIED | chat=%d | cat=%s | q=%.60s", chat_id, category, text)
 

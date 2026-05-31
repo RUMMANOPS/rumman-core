@@ -757,9 +757,15 @@ async def _save_active_focus(
         pass
 
 
-def _build_context_block(ctx: dict) -> str | None:
-    """Format student context signals into a system-prompt injection block."""
+def _build_context_block(
+    ctx: dict,
+    course_profile: dict | None = None,
+    exam_signals: list[dict] | None = None,
+) -> str | None:
+    """Format student context + corpus intelligence into a system-prompt injection block."""
     parts: list[str] = []
+
+    # Student signals
     enrolled = (ctx.get("enrolled_courses") or {}).get("context_value", {}).get("codes", [])
     if enrolled:
         parts.append(f"الطالب مسجل في: {', '.join(enrolled)}")
@@ -769,9 +775,87 @@ def _build_context_block(ctx: dict) -> str | None:
         if focus.get("exam_type"):
             line += f" ({focus['exam_type']})"
         parts.append(line)
+
+    # Corpus intelligence
+    if course_profile:
+        cov   = course_profile.get("coverage_level", "none")
+        total = course_profile.get("total_chunks", 0)
+        exam  = course_profile.get("exam_chunks", 0)
+        flags = []
+        if course_profile.get("has_exam_archives"):
+            flags.append("أرشيف اختبارات")
+        if course_profile.get("has_official_docs"):
+            flags.append("وثائق رسمية")
+        if course_profile.get("has_summaries"):
+            flags.append("ملخصات")
+        cov_label = {
+            "strong":   "تغطية قوية",
+            "moderate": "تغطية متوسطة",
+            "thin":     "تغطية محدودة",
+            "none":     "لا توجد بيانات",
+        }.get(cov, cov)
+        flag_str = " | ".join(flags) if flags else "لا يوجد محتوى مصنّف"
+        parts.append(
+            f"معرفة RUMMAN بالمادة: {cov_label} ({total} مقطع، منها {exam} من الاختبارات) — {flag_str}"
+        )
+
+    if exam_signals:
+        for sig in exam_signals[:2]:
+            topics = sig.get("top_topics") or []
+            if topics:
+                etype = sig.get("exam_type", "")
+                label = {"midterm": "الميدترم", "final": "الفاينل", "quiz": "الكويز"}.get(etype, etype)
+                parts.append(f"المواضيع المتكررة في {label}: {', '.join(topics[:6])}")
+
     if not parts:
         return None
-    return "سياق الطالب:\n" + "\n".join(parts)
+    return "سياق المادة والطالب:\n" + "\n".join(parts)
+
+
+async def _fetch_course_intelligence(
+    http: httpx.AsyncClient,
+    course_code: str,
+    exam_type: str | None = None,
+) -> tuple[dict | None, list[dict]]:
+    """Fetch course profile and exam signals for a course. Returns (profile, signals)."""
+    try:
+        r_profile = await http.get(
+            f"{SUPABASE_URL}/rest/v1/course_intelligence_profiles",
+            headers=HEADERS,
+            params={
+                "course_code": f"eq.{course_code}",
+                "tenant_id":   f"eq.{SEU_TENANT_ID}",
+                "select":      "coverage_level,total_chunks,exam_chunks,has_exam_archives,has_official_docs,has_summaries",
+                "limit":       "1",
+            },
+            timeout=2,
+        )
+        profile = r_profile.json()[0] if r_profile.status_code == 200 and r_profile.json() else None
+    except Exception:
+        profile = None
+
+    signals: list[dict] = []
+    try:
+        params: dict = {
+            "course_code": f"eq.{course_code}",
+            "tenant_id":   f"eq.{SEU_TENANT_ID}",
+            "select":      "exam_type,top_topics,confidence",
+            "limit":       "4",
+        }
+        if exam_type:
+            params["exam_type"] = f"eq.{exam_type}"
+        r_sig = await http.get(
+            f"{SUPABASE_URL}/rest/v1/exam_intelligence",
+            headers=HEADERS,
+            params=params,
+            timeout=2,
+        )
+        if r_sig.status_code == 200:
+            signals = r_sig.json()
+    except Exception:
+        pass
+
+    return profile, signals
 
 
 # ---------------------------------------------------------------------------
@@ -1265,13 +1349,32 @@ async def synthesize(req: SynthesizeRequest):
             ))
             return {**cached, "latency_ms": latency, "cache_hit": True}
 
-    # Fetch student context (enrolled courses, active focus) to inject as synthesis primer.
-    # One fast Supabase read; silently skipped if user_id is absent or DB is slow.
+    # Fetch student context + course intelligence in parallel.
+    # All reads are fire-and-forget-safe; silently skipped on timeout/error.
     student_context_block: str | None = None
-    if req.user_id:
-        async with httpx.AsyncClient(timeout=3) as ctx_http:
-            ctx = await _fetch_student_context(ctx_http, req.user_id)
-        student_context_block = _build_context_block(ctx)
+    async with httpx.AsyncClient(timeout=3) as ctx_http:
+        ctx: dict = {}
+        course_profile: dict | None = None
+        exam_signals: list[dict] = []
+
+        fetches = []
+        if req.user_id:
+            fetches.append(_fetch_student_context(ctx_http, req.user_id))
+        if primary_course:
+            fetches.append(_fetch_course_intelligence(ctx_http, primary_course, exam_type))
+
+        if fetches:
+            results_ctx = await asyncio.gather(*fetches, return_exceptions=True)
+            idx = 0
+            if req.user_id:
+                if not isinstance(results_ctx[idx], Exception):
+                    ctx = results_ctx[idx]
+                idx += 1
+            if primary_course:
+                if not isinstance(results_ctx[idx], Exception):
+                    course_profile, exam_signals = results_ctx[idx]
+
+    student_context_block = _build_context_block(ctx, course_profile, exam_signals)
 
     # Select model based on intent complexity — comparison/low-confidence get gpt-4o,
     # all other factual/exam queries get gpt-4o-mini (~75% cheaper).

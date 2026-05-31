@@ -502,7 +502,7 @@ async def main():
                     )
 
                 except Exception as e:
-                    print("LIVE_ERROR", str(e))
+                    print(f"LIVE_ERROR | {e}", flush=True)
 
             if ENABLE_BACKFILL:
                 await historical_backfill(client)

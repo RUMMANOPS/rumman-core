@@ -443,16 +443,23 @@ async def handle_telegram_media(client: TelegramClient, ai: AsyncOpenAI,
 # ── Main loop ──────────────────────────────────────────────────────────────────
 
 CONNECT_RETRY_SECONDS = 180  # wait before retrying after AuthKeyDuplicatedError — 3 min gives Telegram time to release the auth key
+SESSION_NOT_AUTH_RETRY_SECONDS = 600  # retry after 10 min when session string is invalid/expired
 
 
 async def main():
     log("DOWNLOAD_WORKER_START", max_retries=MAX_RETRIES)
 
+    worker_session = os.environ.get("TELEGRAM_WORKER_SESSION_STRING", "").strip()
+    if not worker_session:
+        log("SESSION_WARNING",
+            hint="TELEGRAM_WORKER_SESSION_STRING not set — falling back to TELEGRAM_SESSION_STRING; "
+                 "AuthKeyDuplicatedError expected if listener is running on same session")
+
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     while True:
         client = TelegramClient(
-            StringSession(os.environ.get("TELEGRAM_WORKER_SESSION_STRING") or os.environ["TELEGRAM_SESSION_STRING"]),
+            StringSession(worker_session or os.environ["TELEGRAM_SESSION_STRING"]),
             int(os.environ["TELEGRAM_API_ID"]),
             os.environ["TELEGRAM_API_HASH"],
         )
@@ -460,9 +467,12 @@ async def main():
             await asyncio.wait_for(client.connect(), timeout=30)
 
             if not await client.is_user_authorized():
-                log("SESSION_NOT_AUTHORIZED")
+                log("SESSION_NOT_AUTHORIZED",
+                    hint="session string expired or revoked — set TELEGRAM_WORKER_SESSION_STRING in Railway",
+                    retry_in_s=SESSION_NOT_AUTH_RETRY_SECONDS)
                 await client.disconnect()
-                return
+                await asyncio.sleep(SESSION_NOT_AUTH_RETRY_SECONDS)
+                continue
 
             me = await client.get_me()
             log("DOWNLOAD_WORKER_READY", user_id=me.id)

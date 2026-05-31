@@ -1,6 +1,6 @@
 {
   "_meta": {
-    "version": "2026-05-28",
+    "version": "2026-06-01",
     "description": "Static keyword hints that bias the intent classifier before it calls the LLM. A triggered hint is passed as context to the classifier prompt — it confirms/overrides based on full query. Multiple patterns can trigger; all are passed. Triggers are checked against the post-normalization query."
   },
 
@@ -109,6 +109,18 @@
         "registration", "add drop", "withdrawal"
       ],
       "bias_intent": "deadline",
+      "bias_source_type": null
+    },
+    {
+      "id": "comparison",
+      "triggers": [
+        "الفرق بين", "فرق بين", "مقارنة بين",
+        "أيهما أفضل", "ايهما أحسن", "وش أحسن",
+        "compare", "difference between", "vs", "versus",
+        "مقابل", "بالمقارنة", "أحسن من",
+        "متشابهين", "مختلفين"
+      ],
+      "bias_intent": "comparison",
       "bias_source_type": null
     }
   ]

@@ -424,7 +424,7 @@ async def _synthesize(
     conversation_history: list[dict] | None = None,
 ) -> dict | None:
     try:
-        payload: dict = {"query": query, "limit": 5}
+        payload: dict = {"query": query, "limit": 8}
         if user_id:
             payload["user_id"] = user_id
         if session_id:

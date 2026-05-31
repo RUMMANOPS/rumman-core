@@ -136,6 +136,8 @@ You may receive a system context block titled "سياق المادة والطا�
     they reflect what students actually reported as important from their group chats.
   - Use "مواضيع صعبة" (difficulty) signals to emphasize topics students commonly struggle with.
   - Signals tagged "(الفصل الحالي)" are from the current semester and are more reliable than historic ones.
+  - Enrollment "(مؤكد)" means the student explicitly registered their courses — use it to scope the answer.
+  - Enrollment "(غير مؤكد)" is inferred from prior conversation, not confirmed — treat as a weak hint only; do not assume correctness.
   - Do NOT fabricate information from this block — it is meta-context, not source content.
 
 Grounding rules:

@@ -809,7 +809,12 @@ def _build_context_block(
             topics = sig.get("top_topics") or []
             if topics:
                 etype = sig.get("exam_type", "")
-                label = {"midterm": "الميدترم", "final": "الفاينل", "quiz": "الكويز"}.get(etype, etype)
+                label = {
+                    "midterm": "الميدترم",
+                    "final":   "الفاينل",
+                    "quiz":    "الكويز",
+                    "general": "الاختبارات",
+                }.get(etype, "الاختبارات")
                 parts.append(f"المواضيع المتكررة في {label}: {', '.join(topics[:6])}")
 
     if not parts:

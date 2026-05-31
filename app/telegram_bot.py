@@ -223,7 +223,7 @@ async def _classify_message(text: str) -> str:
     if not _ai:
         return "academic"
 
-    key = text[:200].lower().strip()
+    key = hashlib.sha256(text.encode()).hexdigest()[:32]
     if key in _CLASSIFY_CACHE:
         return _CLASSIFY_CACHE[key]
 

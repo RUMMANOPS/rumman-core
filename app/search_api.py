@@ -244,9 +244,9 @@ def _deduplicate(results: list[dict], limit: int) -> list[dict]:
     seen: dict[str, dict] = {}
     for row in results:
         key = hashlib.md5((row.get("content") or "").encode()).hexdigest()
-        if key not in seen or row.get("similarity", 0) > seen[key].get("similarity", 0):
+        if key not in seen or (row.get("similarity") or 0) > (seen[key].get("similarity") or 0):
             seen[key] = row
-    deduped = sorted(seen.values(), key=lambda r: r.get("similarity", 0), reverse=True)
+    deduped = sorted(seen.values(), key=lambda r: r.get("similarity") or 0, reverse=True)
     return deduped[:limit]
 
 

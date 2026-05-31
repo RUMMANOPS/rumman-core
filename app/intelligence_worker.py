@@ -124,19 +124,25 @@ async def fetch_messages(http: httpx.AsyncClient, after_id: str | None) -> list[
 
 async def extract_items(ai: AsyncOpenAI, message_text: str) -> tuple[list[dict], int]:
     """Call gpt-4o-mini. Returns (items, total_tokens)."""
-    resp = await ai.chat.completions.create(
-        model=MODEL,
-        temperature=0.1,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user",   "content": message_text},
-        ],
+    resp = await asyncio.wait_for(
+        ai.chat.completions.create(
+            model=MODEL,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user",   "content": message_text},
+            ],
+        ),
+        timeout=30,
     )
-    raw = resp.choices[0].message.content
+    raw = resp.choices[0].message.content or "{}"
     tokens = resp.usage.total_tokens if resp.usage else 0
     # Model returns a JSON object with an "items" key or a bare JSON array
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except (json.JSONDecodeError, ValueError):
+        return [], tokens
     items = parsed if isinstance(parsed, list) else parsed.get("items", [])
     return items, tokens
 
@@ -238,7 +244,10 @@ async def main():
                     last_id = msg["id"]
 
                 if last_id and last_id != cursor:
-                    await save_cursor(http, last_id)
+                    try:
+                        await save_cursor(http, last_id)
+                    except Exception as exc:
+                        log("CURSOR_SAVE_ERROR", error=str(exc)[:120])
                     log("BATCH_DONE", processed=len(messages), saved=items_saved,
                         duplicate=items_duplicate, tokens=tokens_used, cursor=last_id)
                     if hb:

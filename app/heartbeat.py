@@ -62,5 +62,5 @@ class Heartbeat:
                 },
                 timeout=5,
             )
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"HEARTBEAT_ERROR | worker={self._worker_id} | {e}", flush=True)

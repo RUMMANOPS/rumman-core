@@ -175,6 +175,28 @@ async def save_item(http: httpx.AsyncClient, item: dict, msg: dict) -> str:
     return "saved"
 
 
+_EXTRACT_CONCURRENCY = int(os.getenv("INTELLIGENCE_CONCURRENCY", "15"))
+
+
+async def _process_one(
+    ai: AsyncOpenAI,
+    sem: asyncio.Semaphore,
+    msg: dict,
+) -> tuple[dict, list[dict], int]:
+    """Extract intelligence items from one message under a concurrency semaphore.
+    Always returns (msg, items, tokens) — never raises."""
+    text = (msg.get("message_text") or "").strip()
+    if not text:
+        return msg, [], 0
+    async with sem:
+        try:
+            items, tokens = await extract_items(ai, text)
+            return msg, items, tokens
+        except Exception as exc:
+            log("EXTRACT_ERROR", msg_id=msg["id"], error=str(exc)[:120])
+            return msg, [], 0
+
+
 async def main():
     if not _ENABLED:
         log(
@@ -188,7 +210,9 @@ async def main():
             await asyncio.sleep(86400)
 
     ai = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
-    log("INTELLIGENCE_WORKER_START", batch_size=BATCH_SIZE, max_tokens=MAX_TOKENS_PER_RUN)
+    sem = asyncio.Semaphore(_EXTRACT_CONCURRENCY)
+    log("INTELLIGENCE_WORKER_START", batch_size=BATCH_SIZE, max_tokens=MAX_TOKENS_PER_RUN,
+        concurrency=_EXTRACT_CONCURRENCY)
 
     async with httpx.AsyncClient(timeout=60) as http:
         try:
@@ -198,8 +222,19 @@ async def main():
             log("HEARTBEAT_IMPORT_ERROR", error=str(e))
             hb = None
 
+        tokens_used_this_run = 0
+
         while True:
             try:
+                # Budget check between batches — reset each sleep interval.
+                if tokens_used_this_run >= MAX_TOKENS_PER_RUN:
+                    log("BUDGET_REACHED", tokens_used=tokens_used_this_run, limit=MAX_TOKENS_PER_RUN)
+                    if hb:
+                        await hb.beat(status="idle", metadata={"budget_exhausted": True})
+                    await asyncio.sleep(SLEEP_SECONDS)
+                    tokens_used_this_run = 0
+                    continue
+
                 cursor = await get_cursor(http)
                 messages = await fetch_messages(http, cursor)
 
@@ -210,29 +245,19 @@ async def main():
                     await asyncio.sleep(SLEEP_SECONDS)
                     continue
 
-                tokens_used = 0
+                # Process entire batch concurrently — all messages start simultaneously,
+                # semaphore caps in-flight API calls to _EXTRACT_CONCURRENCY.
+                results: list[tuple[dict, list[dict], int]] = await asyncio.gather(
+                    *[_process_one(ai, sem, m) for m in messages]
+                )
+
                 items_saved = 0
                 items_duplicate = 0
+                batch_tokens = 0
                 last_id = cursor
 
-                for msg in messages:
-                    if tokens_used >= MAX_TOKENS_PER_RUN:
-                        log("BUDGET_REACHED", tokens_used=tokens_used, limit=MAX_TOKENS_PER_RUN)
-                        break
-
-                    text = (msg.get("message_text") or "").strip()
-                    if not text:
-                        last_id = msg["id"]
-                        continue
-
-                    try:
-                        items, tokens = await extract_items(ai, text)
-                        tokens_used += tokens
-                    except Exception as exc:
-                        log("EXTRACT_ERROR", msg_id=msg["id"], error=str(exc)[:120])
-                        last_id = msg["id"]
-                        continue
-
+                for msg, items, tokens in results:
+                    batch_tokens += tokens
                     for item in items:
                         if item.get("confidence", 0) < CONFIDENCE_THRESHOLD:
                             continue
@@ -241,8 +266,9 @@ async def main():
                             items_saved += 1
                         elif result == "duplicate":
                             items_duplicate += 1
-
                     last_id = msg["id"]
+
+                tokens_used_this_run += batch_tokens
 
                 if last_id and last_id != cursor:
                     try:
@@ -250,11 +276,13 @@ async def main():
                     except Exception as exc:
                         log("CURSOR_SAVE_ERROR", error=str(exc)[:120])
                     log("BATCH_DONE", processed=len(messages), saved=items_saved,
-                        duplicate=items_duplicate, tokens=tokens_used, cursor=last_id)
+                        duplicate=items_duplicate, tokens=batch_tokens,
+                        run_total=tokens_used_this_run, cursor=last_id)
                     if hb:
                         await hb.beat(
                             status="running",
-                            metadata={"processed": len(messages), "saved": items_saved, "tokens": tokens_used},
+                            metadata={"processed": len(messages), "saved": items_saved,
+                                      "tokens": batch_tokens},
                         )
 
             except Exception as exc:

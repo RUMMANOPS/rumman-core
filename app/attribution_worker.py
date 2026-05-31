@@ -115,14 +115,17 @@ async def fetch_unattributed(http: httpx.AsyncClient) -> list[dict]:
 
 async def classify_chunk(ai: AsyncOpenAI, content: str) -> tuple[str | None, float, int, int]:
     """Returns (course_code, confidence, input_tokens, output_tokens)."""
-    resp = await ai.chat.completions.create(
-        model=MODEL,
-        temperature=0.0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": _ATTRIBUTION_SYSTEM},
-            {"role": "user",   "content": (content or "")[:800]},
-        ],
+    resp = await asyncio.wait_for(
+        ai.chat.completions.create(
+            model=MODEL,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": _ATTRIBUTION_SYSTEM},
+                {"role": "user",   "content": (content or "")[:800]},
+            ],
+        ),
+        timeout=30,
     )
     raw = resp.choices[0].message.content or "{}"
     parsed = json.loads(raw)
@@ -203,7 +206,8 @@ async def main():
             "ATTRIBUTION_WORKER_DISABLED",
             hint="set ATTRIBUTION_WORKER_ENABLED=true in Railway env",
         )
-        return
+        while True:
+            await asyncio.sleep(86400)
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
     log("ATTRIBUTION_WORKER_START", batch_size=BATCH_SIZE, threshold=CONFIDENCE_THRESHOLD,

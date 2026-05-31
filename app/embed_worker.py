@@ -192,66 +192,83 @@ async def update_source_document(http: httpx.AsyncClient, doc_id: str, updates: 
         log("UPDATE_DOCUMENT_ERROR", id=doc_id, status=r.status_code, error=r.text[:120])
 
 
+async def _embed_one(
+    ai: AsyncOpenAI,
+    raw_text: str,
+    doc_id: str,
+    chunk_idx: int,
+) -> Optional[list[float]]:
+    """Embed a single chunk with progressive halving on context-length errors.
+    Returns the embedding vector, or None if all attempts fail."""
+    embed_text = raw_text
+    for attempt in range(3):
+        try:
+            resp = await asyncio.wait_for(
+                ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS),
+                timeout=30,
+            )
+            return resp.data[0].embedding
+        except asyncio.TimeoutError:
+            log("CHUNK_EMBED_TIMEOUT", doc=doc_id, chunk=chunk_idx, attempt=attempt + 1)
+        except Exception as e:
+            if "maximum context length" in str(e) and attempt < 2:
+                embed_text = embed_text[:len(embed_text) // 2]
+                log("CHUNK_HALVED", doc=doc_id, chunk=chunk_idx, new_len=len(embed_text), attempt=attempt + 1)
+            else:
+                log("CHUNK_EMBED_FAILED", doc=doc_id, chunk=chunk_idx, error=str(e)[:120])
+                break
+    return None
+
+
 async def embed_and_insert_chunks(
     ai: AsyncOpenAI,
     http: httpx.AsyncClient,
     doc: dict,
     chunks: list[str],
 ) -> int:
+    # Prepare chunk texts (sanitize + truncate) before spawning embed tasks.
+    prepared: list[str] = []
+    for i, raw in enumerate(chunks):
+        text = raw.replace("\x00", "")
+        if len(text) > _MAX_EMBED_CHARS:
+            log("CHUNK_TRUNCATED", doc=doc["id"], chunk=i, original=len(text), limit=_MAX_EMBED_CHARS)
+            text = text[:_MAX_EMBED_CHARS]
+        prepared.append(text)
+
+    # Embed all chunks in parallel — text-embedding-3-large has generous rate limits.
+    embeddings = list(
+        await asyncio.gather(*[_embed_one(ai, text, doc["id"], i) for i, text in enumerate(prepared)])
+    )
+
     inserted = 0
+    today = date.today().isoformat()
+    total = len(prepared)
 
-    for i, chunk_text in enumerate(chunks):
-        chunk_text = chunk_text.replace("\x00", "")  # PostgreSQL TEXT rejects null bytes
-        if len(chunk_text) > _MAX_EMBED_CHARS:
-            log("CHUNK_TRUNCATED", doc=doc["id"], chunk=i, original=len(chunk_text), limit=_MAX_EMBED_CHARS)
-            chunk_text = chunk_text[:_MAX_EMBED_CHARS]
-
-        # Retry with progressive truncation on context-length errors (mojibake text
-        # tokenizes at up to 2 tokens/char, blowing past the 8192 token hard limit).
-        # A single bad chunk must not fail the whole document — skip and continue.
-        embed_text = chunk_text
-        embedding = None
-        for attempt in range(3):
-            try:
-                resp = await asyncio.wait_for(
-                    ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS),
-                    timeout=30,
-                )
-                embedding = resp.data[0].embedding
-                break
-            except asyncio.TimeoutError as e:
-                log("CHUNK_EMBED_TIMEOUT", doc=doc["id"], chunk=i, attempt=attempt + 1)
-            except Exception as e:
-                if "maximum context length" in str(e) and attempt < 2:
-                    embed_text = embed_text[:len(embed_text) // 2]
-                    log("CHUNK_HALVED", doc=doc["id"], chunk=i, new_len=len(embed_text), attempt=attempt + 1)
-                else:
-                    log("CHUNK_EMBED_FAILED", doc=doc["id"], chunk=i, error=str(e)[:120])
-                    break
+    for i, (chunk_text, embedding) in enumerate(zip(prepared, embeddings)):
         if embedding is None:
             continue
 
         row = {
             "source_document_id": doc["id"],
             "tenant_id":          doc.get("tenant_id") or SEU_TENANT_ID,
-            "content": chunk_text,
-            "embedding": embedding,
-            "embedding_model": EMBED_MODEL,
-            "embedding_dims": EMBED_DIMS,
-            "institution": doc.get("institution", "SEU"),
-            "course_code": doc.get("course_code"),
-            "source_type": doc["source_type"],
-            "exam_type": doc.get("exam_type"),
-            "academic_year": doc.get("academic_year"),
-            "semester": doc.get("semester"),
-            "professor": doc.get("professor"),
-            "language": doc.get("language"),
-            "chunk_index": i,
-            "total_chunks": len(chunks),
-            "ocr_confidence":    doc.get("ocr_confidence"),
-            "authority_tier":    doc.get("authority_tier", "community"),
+            "content":            chunk_text,
+            "embedding":          embedding,
+            "embedding_model":    EMBED_MODEL,
+            "embedding_dims":     EMBED_DIMS,
+            "institution":        doc.get("institution", "SEU"),
+            "course_code":        doc.get("course_code"),
+            "source_type":        doc["source_type"],
+            "exam_type":          doc.get("exam_type"),
+            "academic_year":      doc.get("academic_year"),
+            "semester":           doc.get("semester"),
+            "professor":          doc.get("professor"),
+            "language":           doc.get("language"),
+            "chunk_index":        i,
+            "total_chunks":       total,
+            "ocr_confidence":     doc.get("ocr_confidence"),
+            "authority_tier":     doc.get("authority_tier", "community"),
             "attribution_status": "original",
-            "valid_from":        date.today().isoformat(),
+            "valid_from":         today,
         }
 
         r = await http.post(

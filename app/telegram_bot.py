@@ -435,8 +435,16 @@ async def _synthesize(
 def _format_synthesis(data: dict, query: str = "") -> str:
     if not data.get("grounded"):
         course_match = _COURSE_CODE_RE.search(query)
+        coverage = data.get("course_coverage_level")
         if course_match:
             code = course_match.group(1)
+            if coverage in ("strong", "moderate"):
+                return (
+                    f"عندي محتوى لمادة <b>{code}</b> لكن ما لقيت نتيجة مطابقة لسؤالك.\n\n"
+                    f"جرّب:\n• صيّغ السؤال بشكل مختلف\n"
+                    f"• اسأل عن موضوع أكثر تحديداً\n"
+                    f"• استخدم كلمات مثل: ميدترم، فاينل، تجميعات، ملخص"
+                )
             return (
                 f"ما عندي محتوى لمادة <b>{code}</b> في قاعدة البيانات حالياً.\n\n"
                 f"جرّب مادة ثانية أو اسألني سؤالاً عاماً."

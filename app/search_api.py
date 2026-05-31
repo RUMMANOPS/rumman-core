@@ -1457,15 +1457,16 @@ async def synthesize(req: SynthesizeRequest):
     ]
 
     response_payload = {
-        "query":             req.query,
-        "grounded":          grounded,
-        "answer":            answer,
-        "synthesis_failed":  synthesis_failed,
-        "source_count":      len(results),
-        "sources":           sources,
-        "latency_ms":        latency,
-        "cache_hit":         False,
-        "fallback_chunks":   results if synthesis_failed else [],
+        "query":                req.query,
+        "grounded":             grounded,
+        "answer":               answer,
+        "synthesis_failed":     synthesis_failed,
+        "source_count":         len(results),
+        "sources":              sources,
+        "latency_ms":           latency,
+        "cache_hit":            False,
+        "fallback_chunks":      results if synthesis_failed else [],
+        "course_coverage_level": course_profile.get("coverage_level") if course_profile else None,
     }
 
     # Store in cache if synthesis succeeded and query is cacheable.

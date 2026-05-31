@@ -77,22 +77,29 @@ async def embed_description(
 ) -> bool:
     text = f"{course_title} ({course_code})\n\n{description}"
     try:
-        resp = await ai.embeddings.create(model=EMBED_MODEL, input=text, dimensions=EMBED_DIMS)
+        resp = await asyncio.wait_for(
+            ai.embeddings.create(model=EMBED_MODEL, input=text, dimensions=EMBED_DIMS),
+            timeout=30,
+        )
         embedding = resp.data[0].embedding
 
         r = await http.post(
             f"{SUPABASE_URL}/rest/v1/document_chunks",
             headers=HEADERS,
             json={
-                "tenant_id":    SEU_TENANT_ID,
-                "course_code":  course_code,
-                "source_type":  "course_description",
+                "tenant_id":       SEU_TENANT_ID,
+                "course_code":     course_code,
+                "source_type":     "course_description",
                 "source_authority": "official",
-                "content":      text,
-                "embedding":    embedding,
-                "chunk_index":  0,
-                "total_chunks": 1,
-                "language":     language,
+                "authority_tier":  "official",
+                "embedding_model": EMBED_MODEL,
+                "embedding_dims":  EMBED_DIMS,
+                "attribution_status": "original",
+                "content":         text,
+                "embedding":       embedding,
+                "chunk_index":     0,
+                "total_chunks":    1,
+                "language":        language,
             },
         )
         if r.status_code == 409:

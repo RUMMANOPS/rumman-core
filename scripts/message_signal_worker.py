@@ -393,7 +393,10 @@ async def insert_signals(
             if 0 <= idx < len(messages):
                 mid = messages[idx].get("platform_message_id")
                 if mid:
-                    src_ids.append(int(mid))
+                    try:
+                        src_ids.append(int(str(mid).split(":")[-1]))
+                    except (ValueError, TypeError):
+                        pass
 
         row = {
             "tenant_id":         SEU_TENANT_ID,

@@ -13,7 +13,7 @@ Search pipeline (POST /search):
 
 Synthesis pipeline (POST /synthesize):
   Same as /search steps 1–6, then:
-  8. Grounded synthesis     (gpt-4o by default, corpus-only constraint, ~$0.003)
+  8. Grounded synthesis     (gpt-4o-mini default, gpt-4o for comparison/low-confidence, ~$0.001)
   9. Synthesis event log    (records token usage for cost observability)
 
   The synthesis prompt forbids GPT from using training knowledge about SEU.
@@ -527,13 +527,31 @@ async def _run_retrieval(
 # Grounded synthesis
 # ---------------------------------------------------------------------------
 
-_SYNTHESIS_MODEL = os.environ.get("SYNTHESIS_MODEL", "gpt-4o")
+# Default: gpt-4o-mini for all synthesis (~75% cost reduction vs gpt-4o).
+# Comparison and high-complexity queries are promoted to the premium model automatically.
+# Override both with env vars on Railway if budget constraints change.
+_SYNTHESIS_MODEL         = os.environ.get("SYNTHESIS_MODEL",         "gpt-4o-mini")
+_SYNTHESIS_PREMIUM_MODEL = os.environ.get("SYNTHESIS_PREMIUM_MODEL", "gpt-4o")
+
+# Intent types that warrant the premium model — require genuine cross-concept reasoning.
+_PREMIUM_INTENTS = frozenset({"comparison"})
+
+
+def _select_synthesis_model(intent_type: str | None, confidence: float | None) -> tuple[str, int]:
+    """Return (model_name, max_tokens) for a given intent signal."""
+    if intent_type in _PREMIUM_INTENTS:
+        return _SYNTHESIS_PREMIUM_MODEL, 700
+    if confidence is not None and confidence < 0.55:
+        return _SYNTHESIS_PREMIUM_MODEL, 700
+    return _SYNTHESIS_MODEL, 400
 
 
 async def _synthesize_answer(
     query: str,
     chunks: list[dict],
     conversation_history: list[dict] | None = None,
+    model: str | None = None,
+    max_tokens: int = 400,
 ) -> tuple[str, int]:
     """
     Synthesize a grounded answer from chunks.
@@ -574,10 +592,10 @@ async def _synthesize_answer(
 
     resp = await asyncio.wait_for(
         ai.chat.completions.create(
-            model=_SYNTHESIS_MODEL,
+            model=model or _SYNTHESIS_MODEL,
             messages=messages,
             temperature=0.1,
-            max_tokens=700,
+            max_tokens=max_tokens,
         ),
         timeout=_SYNTHESIS_TIMEOUT,
     )
@@ -1005,7 +1023,8 @@ async def search(req: SearchRequest):
 @app.post("/synthesize")
 async def synthesize(req: SynthesizeRequest):
     """
-    Retrieve relevant chunks, then synthesize a grounded answer via gpt-4o (default).
+    Retrieve relevant chunks, then synthesize a grounded answer.
+    Model selection: gpt-4o-mini for factual/exam queries; gpt-4o for comparison/low-confidence.
     The synthesis prompt hard-constrains GPT to only use retrieved chunk content.
     Falls back to returning raw chunks if synthesis times out or fails.
     Supports conversation_history for multi-turn follow-up queries.
@@ -1027,10 +1046,18 @@ async def synthesize(req: SynthesizeRequest):
     synthesis_tokens = 0
     synthesis_failed = False
 
+    # Select model based on intent complexity — comparison/low-confidence get gpt-4o,
+    # all other factual/exam queries get gpt-4o-mini (~75% cheaper).
+    synth_model, synth_max_tokens = _select_synthesis_model(
+        intent.intent_type if intent else None,
+        intent.confidence  if intent else None,
+    )
+
     if grounded:
         try:
             answer, synthesis_tokens = await _synthesize_answer(
-                req.query, results, req.conversation_history
+                req.query, results, req.conversation_history,
+                model=synth_model, max_tokens=synth_max_tokens,
             )
         except asyncio.TimeoutError:
             log.warning("synthesis_timeout | query=%.60s", req.query)
@@ -1060,6 +1087,7 @@ async def synthesize(req: SynthesizeRequest):
             "search_params":      params_log,
             "synthesis_tokens":   synthesis_tokens,
             "synthesis_failed":   synthesis_failed,
+            "synthesis_model":    synth_model,
         },
     ))
 

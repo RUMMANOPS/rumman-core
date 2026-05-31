@@ -213,9 +213,14 @@ async def embed_and_insert_chunks(
         embedding = None
         for attempt in range(3):
             try:
-                resp = await ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS)
+                resp = await asyncio.wait_for(
+                    ai.embeddings.create(model=EMBED_MODEL, input=embed_text, dimensions=EMBED_DIMS),
+                    timeout=30,
+                )
                 embedding = resp.data[0].embedding
                 break
+            except asyncio.TimeoutError as e:
+                log("CHUNK_EMBED_TIMEOUT", doc=doc["id"], chunk=i, attempt=attempt + 1)
             except Exception as e:
                 if "maximum context length" in str(e) and attempt < 2:
                     embed_text = embed_text[:len(embed_text) // 2]

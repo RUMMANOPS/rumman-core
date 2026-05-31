@@ -51,6 +51,7 @@ _CACHE_MAX_ENTRIES = 50_000
 _USER_CACHE:    dict[int, str]               = {}
 _SESSION_CACHE: dict[int, tuple[str, float]] = {}
 _ENROLLED:      dict[int, list[str]]         = {}
+_ENROLLED_CONFIRMED: set[int]               = set()  # chat_ids with explicit /mycourses confirmation
 _PROMPTED_FOR_COURSES: set[int]              = set()
 _HISTORY_MAX_TURNS = 6
 _HISTORY_CACHE: dict[int, deque]             = {}
@@ -200,14 +201,15 @@ _CLASSIFY_SYSTEM = """\
 Classify this student message for an Arabic university assistant (RUMMAN).
 Return EXACTLY ONE word from this list — nothing else:
 
-greeting     — hi/hello/مرحبا/اهلين/السلام عليكم/صباح الخير or similar
-identity_bot — who/what are you | من انت | وش انت | ايش انت
-identity_user — who am I | من انا | ما اسمي | من أنا
-capability   — can you do X | هل اقدر | هل عندك | وش تقدر | كيف تساعد | هل تستطيع
-meta         — comment on previous answer | هل متأكد | راجع | صح ولا غلط | مقتنع | وش مصدرك
-ack          — thanks/ok/تمام/شكرا/👍 or very short acknowledgement
-off_topic    — clearly unrelated to university/courses (weather, news, politics, jokes)
-academic     — anything about courses/exams/deadlines/study materials/university admin
+greeting          — hi/hello/مرحبا/اهلين/السلام عليكم/صباح الخير or similar
+identity_bot      — who/what are you | من انت | وش انت | ايش انت
+identity_user     — who am I | من انا | ما اسمي | من أنا
+capability        — can you do X | هل اقدر | هل عندك | وش تقدر | كيف تساعد | هل تستطيع
+meta              — comment on previous answer | هل متأكد | راجع | صح ولا غلط | مقتنع | وش مصدرك
+ack               — thanks/ok/تمام/شكرا/👍 or very short acknowledgement
+off_topic         — clearly unrelated to university/courses (weather, news, politics, jokes)
+course_correction — user says the stored courses are wrong | هذي مو موادي | امسح موادي | غلط المواد | ما سجلت | الغ | انسى موادي | نسيت مو ذاكر
+academic          — anything about courses/exams/deadlines/study materials/university admin
 
 When in doubt choose: academic"""
 
@@ -243,7 +245,7 @@ async def _classify_message(text: str) -> str:
         result = resp.choices[0].message.content.strip().lower().split()[0]
         if result not in {
             "greeting", "identity_bot", "identity_user",
-            "capability", "meta", "ack", "off_topic", "academic"
+            "capability", "meta", "ack", "off_topic", "academic", "course_correction"
         }:
             result = "academic"
     except Exception as exc:
@@ -529,6 +531,7 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
 
     if codes:
         _ENROLLED[chat_id] = codes
+        _ENROLLED_CONFIRMED.add(chat_id)
         codes_str = "،  ".join(codes)
         await _send(http, chat_id,
             f"✅ تم حفظ موادك:\n<b>{codes_str}</b>\n\n"
@@ -567,6 +570,48 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
                 "أرسل: <code>/mycourses IT362 CS251</code> لتسجيل موادك\n"
                 "وسأخصص إجاباتي لموادك فقط."
             )
+
+
+# ---------------------------------------------------------------------------
+# Course correction — clear all inferred enrollment state
+# ---------------------------------------------------------------------------
+
+async def _handle_course_correction(http: httpx.AsyncClient, chat_id: int) -> None:
+    """User says stored courses are wrong. Clear all enrollment state and DB record."""
+    had_courses = _ENROLLED.pop(chat_id, None)
+    _ENROLLED_CONFIRMED.discard(chat_id)
+    _PROMPTED_FOR_COURSES.discard(chat_id)
+    _HISTORY_CACHE.pop(chat_id, None)
+
+    # Clear persisted student_context in DB so the wrong courses don't resurface on restart
+    user_id = await _get_or_create_user(http, chat_id)
+    if user_id:
+        try:
+            await http.post(
+                f"{SEARCH_API_URL}/v1/users/{user_id}/context",
+                json={
+                    "context_type":  "enrolled_courses",
+                    "context_value": {"codes": []},
+                    "confidence":    "high",
+                    "source":        "explicit",
+                },
+                timeout=5,
+            )
+        except Exception as exc:
+            log.debug("course_correction_context_clear_failed | %s", exc)
+
+    if had_courses:
+        log.info("COURSE_CORRECTION | chat=%d | cleared=%s", chat_id, had_courses)
+        await _send(http, chat_id,
+            "✅ مسحت موادك المحفوظة.\n\n"
+            "إذا تبي تسجّل موادك الصحيحة، أرسل:\n"
+            "<code>/mycourses IT362 CS251 MGT311</code>"
+        )
+    else:
+        await _send(http, chat_id,
+            "ما في مواد محفوظة أصلاً.\n\n"
+            "أرسل <code>/mycourses IT362 CS251</code> لتسجيل موادك."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -776,6 +821,10 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         await _handle_mycourses(http, chat_id, text)
         return
 
+    if text.lower().startswith("/forget"):
+        await _handle_course_correction(http, chat_id)
+        return
+
     if text.startswith("/"):
         return
 
@@ -840,6 +889,10 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         )
         return
 
+    if category == "course_correction":
+        await _handle_course_correction(http, chat_id)
+        return
+
     # Default: academic retrieval
     await _handle_academic(http, chat_id, text)
 
@@ -897,8 +950,9 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     # retrieval. One clarifying question beats a failed synthesis as a first impression.
     has_course_code   = bool(_COURSE_CODE_RE.search(text))
     has_exam_keyword  = any(kw in text.lower() for kw in _EXAM_KEYWORDS)
-    has_enrolled      = bool(_ENROLLED.get(chat_id))
-    if has_exam_keyword and not has_course_code and not has_enrolled:
+    # Only treat confirmed enrollment as context — inferred courses must not gate or inject.
+    has_confirmed     = chat_id in _ENROLLED_CONFIRMED
+    if has_exam_keyword and not has_course_code and not has_confirmed:
         await _send(http, chat_id,
             "أي مادة تقصد؟ 📚\n\n"
             "اذكر رمز المادة مثل <code>IT362</code> أو <code>MGT311</code>\n"
@@ -908,7 +962,7 @@ async def _handle_academic(http: httpx.AsyncClient, chat_id: int, text: str) -> 
         return
 
     query = text
-    if not has_course_code and has_enrolled:
+    if not has_course_code and has_confirmed:
         enrolled_str = " ".join(_ENROLLED[chat_id])
         query = f"{text} (موادي: {enrolled_str})"
 

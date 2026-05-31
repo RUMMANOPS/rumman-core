@@ -776,9 +776,14 @@ def _build_context_block(
     parts: list[str] = []
 
     # Student signals
-    enrolled = (ctx.get("enrolled_courses") or {}).get("context_value", {}).get("codes", [])
+    enrolled_ctx = ctx.get("enrolled_courses") or {}
+    enrolled = enrolled_ctx.get("context_value", {}).get("codes", [])
     if enrolled:
-        parts.append(f"الطالب مسجل في: {', '.join(enrolled)}")
+        confidence = enrolled_ctx.get("confidence", "low")
+        if confidence == "high":
+            parts.append(f"الطالب مسجل (مؤكد) في: {', '.join(enrolled)}")
+        else:
+            parts.append(f"الطالب يبدو مسجلاً (غير مؤكد) في: {', '.join(enrolled)} — لا تفترض هذه المواد بشكل قاطع")
     focus = (ctx.get("active_focus") or {}).get("context_value", {})
     if focus.get("course_code"):
         line = f"المادة الحالية: {focus['course_code']}"

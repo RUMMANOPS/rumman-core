@@ -326,15 +326,18 @@ async def extract_signals(
     formatted = _format_window(messages)
     prompt    = f'Chat: "{chat_name}"\n\nMessages:\n{formatted}'
 
-    resp = await ai.chat.completions.create(
-        model=EXTRACT_MODEL,
-        temperature=0.1,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": EXTRACT_SYSTEM},
-            {"role": "user",   "content": prompt[:12000]},
-        ],
-        max_tokens=800,
+    resp = await asyncio.wait_for(
+        ai.chat.completions.create(
+            model=EXTRACT_MODEL,
+            temperature=0.1,
+            response_format={"type": "json_object"},
+            messages=[
+                {"role": "system", "content": EXTRACT_SYSTEM},
+                {"role": "user",   "content": prompt[:12000]},
+            ],
+            max_tokens=800,
+        ),
+        timeout=30,
     )
 
     raw  = resp.choices[0].message.content or "{}"

@@ -285,10 +285,13 @@ async def run_association(
 
             # Embed the concept name
             try:
-                resp = await ai.embeddings.create(
-                    model=EMBED_MODEL,
-                    input=concept_name,
-                    dimensions=EMBED_DIMS,
+                resp = await asyncio.wait_for(
+                    ai.embeddings.create(
+                        model=EMBED_MODEL,
+                        input=concept_name,
+                        dimensions=EMBED_DIMS,
+                    ),
+                    timeout=30,
                 )
                 embedding = resp.data[0].embedding
             except Exception as exc:

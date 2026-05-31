@@ -131,15 +131,18 @@ category label: mixed, morphological, or social"""
 
 async def _generate_batch(ai: AsyncOpenAI, batch: dict) -> list[dict]:
     """Run one generation batch. Returns list of entry dicts."""
-    resp = await ai.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": _BATCH_SYSTEM},
-            {"role": "user",   "content": batch["prompt"]},
-        ],
-        temperature=0.3,
-        max_tokens=5000,
-        response_format={"type": "json_object"},
+    resp = await asyncio.wait_for(
+        ai.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": _BATCH_SYSTEM},
+                {"role": "user",   "content": batch["prompt"]},
+            ],
+            temperature=0.3,
+            max_tokens=5000,
+            response_format={"type": "json_object"},
+        ),
+        timeout=120,
     )
 
     raw = json.loads(resp.choices[0].message.content)

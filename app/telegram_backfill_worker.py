@@ -772,8 +772,15 @@ async def main():
             try:
                 await asyncio.wait_for(client.connect(), timeout=30)
                 if not await client.is_user_authorized():
-                    print("NOT_AUTHORIZED — check TELEGRAM_SESSION_STRING", flush=True)
-                    return
+                    print(
+                        f"NOT_AUTHORIZED — session expired or revoked; "
+                        f"set TELEGRAM_BACKFILL_SESSION_STRING in Railway; "
+                        f"retrying in 600s",
+                        flush=True,
+                    )
+                    await client.disconnect()
+                    await asyncio.sleep(600)
+                    continue
 
                 me = await client.get_me()
                 print(f"LOGGED_IN: {me.id}", flush=True)

@@ -1156,40 +1156,47 @@ async def course_inventory(req: CourseInventoryRequest):
                     "name_ar": row.get("name_ar") or "",
                 }
 
-        # ── Step 4: Count document_chunks per code ────────────────────────────
-        from collections import defaultdict
-        chunk_data: dict[str, dict] = defaultdict(lambda: {"count": 0, "source_types": set()})
-
+        # ── Step 4: Fetch pre-computed profiles (faster than raw chunk scan) ────
+        profile_data: dict[str, dict] = {}
         r = await http.get(
-            f"{SUPABASE_URL}/rest/v1/document_chunks",
+            f"{SUPABASE_URL}/rest/v1/course_intelligence_profiles",
             headers=HEADERS,
             params={
                 "course_code": f"in.({codes_param})",
-                "select":      "course_code,source_type",
-                "limit":       "2000",
+                "tenant_id":   f"eq.{SEU_TENANT_ID}",
+                "select":      "course_code,total_chunks,exam_chunks,has_exam_archives,has_official_docs,has_summaries,coverage_level",
+                "limit":       "20",
             },
         )
         if r.status_code == 200:
             for row in r.json():
-                code = row.get("course_code")
-                if code:
-                    chunk_data[code]["count"] += 1
-                    if row.get("source_type"):
-                        chunk_data[code]["source_types"].add(row["source_type"])
+                profile_data[row["course_code"]] = row
 
         # ── Step 5: Build inventory ───────────────────────────────────────────
         inventory: dict[str, dict] = {}
         for code in all_codes:
-            meta   = course_meta.get(code, {})
-            chunks = chunk_data.get(code, {"count": 0, "source_types": set()})
-            src_types = sorted(chunks["source_types"])
+            meta    = course_meta.get(code, {})
+            profile = profile_data.get(code, {})
+            src_labels: list[str] = []
+            src_types:  list[str] = []
+            if profile.get("has_exam_archives"):
+                src_labels.append(_SOURCE_TYPE_LABELS.get("exam", "تجميعات اختبارات"))
+                src_types.append("exam")
+            if profile.get("has_official_docs"):
+                src_labels.append(_SOURCE_TYPE_LABELS.get("study_plan", "وثائق رسمية"))
+                src_types.append("official")
+            if profile.get("has_summaries"):
+                src_labels.append(_SOURCE_TYPE_LABELS.get("upload", "ملخصات"))
+                src_types.append("summary")
             inventory[code] = {
-                "name_en":     meta.get("name_en", ""),
-                "name_ar":     meta.get("name_ar", ""),
-                "in_catalog":  code in course_meta,
-                "chunk_count": chunks["count"],
-                "source_types": src_types,
-                "source_labels": [_SOURCE_TYPE_LABELS.get(s, s) for s in src_types],
+                "name_en":      meta.get("name_en", ""),
+                "name_ar":      meta.get("name_ar", ""),
+                "in_catalog":   code in course_meta,
+                "chunk_count":  profile.get("total_chunks", 0),
+                "exam_chunks":  profile.get("exam_chunks", 0),
+                "coverage_level": profile.get("coverage_level", "none"),
+                "source_types":  src_types,
+                "source_labels": src_labels,
             }
 
         unresolved = [n for n in req.names if n not in resolved]

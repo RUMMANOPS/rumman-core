@@ -106,7 +106,7 @@ _EXAM_KEYWORDS = {
 _COURSE_NUDGE = (
     "\n\n💡 <i>لتحسين إجاباتي لموادك تحديداً، أرسل:\n"
     "<code>/mycourses IT362 CS251 MGT311</code>\n"
-    "وسأفيلتر النتائج حسب موادك. لمسح الموادك: /forget</i>"
+    "وسأفيلتر النتائج حسب موادك. لمسح موادك: /forget</i>"
 )
 
 # ---------------------------------------------------------------------------
@@ -234,7 +234,7 @@ _CLASSIFY_CACHE: dict[str, str] = {}  # small in-memory cache for repeated queri
 async def _classify_message(text: str) -> str:
     """
     Returns one of: greeting, identity_bot, identity_user, capability,
-    meta, ack, off_topic, academic.
+    meta, ack, off_topic, course_correction, academic.
     Falls back to 'academic' on any error (safe default for retrieval).
     """
     if not _ai:
@@ -551,7 +551,7 @@ async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) ->
         await _send(http, chat_id,
             f"✅ تم حفظ موادك:\n<b>{codes_str}</b>\n\n"
             "سأفيلتر إجاباتي حسب موادك من الآن.\n"
-            "لتغيير الموادك، أرسل الأمر مرة ثانية مع الأكواد الجديدة."
+            "لتغيير موادك، أرسل الأمر مرة ثانية مع الأكواد الجديدة."
         )
         log.info("MYCOURSES_SET | chat=%d | courses=%s", chat_id, codes)
 

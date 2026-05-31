@@ -71,7 +71,7 @@ def fetch_chunk_aggregates(http: httpx.Client, course_code=None) -> list[dict]:
             COUNT(*) AS chunk_count,
             MAX(ingested_at) AS last_indexed_at
         FROM document_chunks
-        WHERE tenant_id = '{SEU_TENANT_ID}'
+        WHERE (tenant_id = '{SEU_TENANT_ID}' OR tenant_id IS NULL)
             AND course_code IS NOT NULL
             {course_filter}
         GROUP BY course_code, source_type

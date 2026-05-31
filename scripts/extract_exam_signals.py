@@ -57,14 +57,17 @@ EXAM_TYPES = {
 
 
 def fetch_exam_chunks(http: httpx.Client, course_code: str) -> list[dict]:
-    """Fetch all exam-tagged chunks for a course."""
+    """Fetch all exam-tagged chunks for a course.
+    Includes rows with tenant_id = SEU_TENANT_ID OR tenant_id IS NULL
+    (NULL rows are legacy ingestions before the tenant_id backfill migration).
+    """
     r = http.get(
         f"{SUPABASE_URL}/rest/v1/document_chunks",
         headers={**REST_HEADERS, "Prefer": ""},
         params={
             "course_code": f"eq.{course_code}",
             "source_type": "eq.exam",
-            "tenant_id":   f"eq.{SEU_TENANT_ID}",
+            "or":          f"(tenant_id.eq.{SEU_TENANT_ID},tenant_id.is.null)",
             "select":      "content,metadata",
             "limit":       "300",
         },
@@ -170,6 +173,9 @@ def fetch_courses_with_exam_chunks(http: httpx.Client, min_chunks: int) -> list[
         },
         timeout=15,
     )
+    # Note: course_intelligence_profiles rows always have tenant_id = SEU_TENANT_ID
+    # (set by refresh_course_profiles.py). The NULL tenant_id issue only affects
+    # document_chunks source data, not the computed profiles.
     if r.status_code >= 400:
         # Fallback: query document_chunks directly if profiles not yet built
         print("  course_intelligence_profiles not ready — falling back to direct chunk query")
@@ -178,7 +184,7 @@ def fetch_courses_with_exam_chunks(http: httpx.Client, min_chunks: int) -> list[
             headers={**REST_HEADERS, "Prefer": ""},
             params={
                 "source_type": "eq.exam",
-                "tenant_id":   f"eq.{SEU_TENANT_ID}",
+                "or":          f"(tenant_id.eq.{SEU_TENANT_ID},tenant_id.is.null)",
                 "select":      "course_code",
                 "limit":       "10000",
             },

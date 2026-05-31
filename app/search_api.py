@@ -430,18 +430,50 @@ _INTELLIGENCE_ITEM_LABELS = {
 }
 
 
+def _format_intel_row(item: dict, origin: str) -> dict:
+    """Shared formatter: convert an intelligence_items or extracted_items row into a retrieval row."""
+    label   = _INTELLIGENCE_ITEM_LABELS.get(item.get("item_type", ""), item.get("item_type", ""))
+    # intelligence_items uses title+description; extracted_items uses content directly
+    content = item.get("content") or (
+        (item.get("title") or "") +
+        ((" — " + item["description"]) if item.get("description") else "")
+    )
+    due  = item.get("due_date")
+    code = item.get("course_code") or ""
+    # intelligence_items stores chat_name inside metadata JSON
+    chat = item.get("chat_name") or (item.get("metadata") or {}).get("chat_name") or "مجموعة"
+
+    lines = [f"[{label}] {content}"]
+    if due:
+        lines.append(f"الموعد: {due}")
+    if code:
+        lines.append(f"المادة: {code}")
+    lines.append(f"المصدر: {chat}")
+
+    return {
+        "content":          "\n".join(lines),
+        "course_code":      code or None,
+        "source_type":      "telegram_export",
+        "source_authority": "community",
+        "authority_tier":   "community",
+        "similarity":       min(float(item.get("confidence", 0.65)), 0.88),
+        "metadata":         {"origin": origin},
+    }
+
+
 async def _retrieve_intelligence_items(
     http: httpx.AsyncClient,
     course_codes: list[str],
     item_types: list[str] | None = None,
     days_back: int = 60,
 ) -> list[dict]:
-    """Query extracted_items (daily_brief output) for recent community-sourced events.
-    Returns results in the same shape as match_documents rows."""
+    """Query both extracted_items (daily_brief) and intelligence_items (worker) for
+    recent community-sourced events. Returns results in match_documents row shape."""
     from datetime import date, timedelta
     cutoff = (date.today() - timedelta(days=days_back)).isoformat()
 
-    params: list[tuple] = [
+    # ── Query 1: extracted_items via active_extracted_items view ─────────────
+    ext_params: list[tuple] = [
         ("tenant_id",  f"eq.{SEU_TENANT_ID}"),
         ("created_at", f"gte.{cutoff}"),
         ("confidence", "gte.0.65"),
@@ -450,46 +482,41 @@ async def _retrieve_intelligence_items(
         ("limit",      "20"),
     ]
     if course_codes:
-        params.append(("course_code", f"in.({','.join(course_codes)})"))
+        ext_params.append(("course_code", f"in.({','.join(course_codes)})"))
     if item_types:
-        params.append(("item_type", f"in.({','.join(item_types)})"))
+        ext_params.append(("item_type", f"in.({','.join(item_types)})"))
 
-    # Query the view — handles valid_until, validity_status, and superseded_by
-    # automatically. Falls back to empty list if migration 025 not yet applied.
-    r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/active_extracted_items",
-        headers=HEADERS,
-        params=params,
+    # ── Query 2: intelligence_items (real-time worker output) ────────────────
+    int_params: list[tuple] = [
+        ("tenant_id",  f"eq.{SEU_TENANT_ID}"),
+        ("created_at", f"gte.{cutoff}"),
+        ("confidence", "gte.0.65"),
+        ("select",     "item_type,title,description,due_date,course_code,confidence,metadata,created_at"),
+        ("order",      "due_date.asc.nullslast"),
+        ("limit",      "20"),
+    ]
+    if course_codes:
+        int_params.append(("course_code", f"in.({','.join(course_codes)})"))
+    if item_types:
+        int_params.append(("item_type", f"in.({','.join(item_types)})"))
+
+    ext_resp, int_resp = await asyncio.gather(
+        http.get(f"{SUPABASE_URL}/rest/v1/active_extracted_items", headers=HEADERS, params=ext_params),
+        http.get(f"{SUPABASE_URL}/rest/v1/intelligence_items",     headers=HEADERS, params=int_params),
+        return_exceptions=True,
     )
-    if r.status_code >= 400 or not r.json():
-        return []
 
-    results = []
-    for item in r.json():
-        label   = _INTELLIGENCE_ITEM_LABELS.get(item.get("item_type", ""), item.get("item_type", ""))
-        content = item.get("content") or ""
-        due     = item.get("due_date")
-        code    = item.get("course_code") or ""
-        chat    = item.get("chat_name") or "مجموعة"
+    results: list[dict] = []
+    if not isinstance(ext_resp, Exception) and ext_resp.status_code == 200:
+        for item in (ext_resp.json() or []):
+            results.append(_format_intel_row(item, "extracted_items"))
+    if not isinstance(int_resp, Exception) and int_resp.status_code == 200:
+        for item in (int_resp.json() or []):
+            results.append(_format_intel_row(item, "intelligence_items"))
 
-        lines = [f"[{label}] {content}"]
-        if due:
-            lines.append(f"الموعد: {due}")
-        if code:
-            lines.append(f"المادة: {code}")
-        lines.append(f"المصدر: {chat}")
-
-        results.append({
-            "content":          "\n".join(lines),
-            "course_code":      code or None,
-            "source_type":      "telegram_export",
-            "source_authority": "community",
-            "authority_tier":   "community",
-            "similarity":       min(float(item.get("confidence", 0.65)), 0.88),
-            "metadata":         {"origin": "extracted_items"},
-        })
-
-    return results
+    # Sort by similarity (proxy for confidence) descending, cap total
+    results.sort(key=lambda r: r.get("similarity", 0), reverse=True)
+    return results[:30]
 
 
 # ---------------------------------------------------------------------------

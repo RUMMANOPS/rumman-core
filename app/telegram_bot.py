@@ -68,6 +68,18 @@ _ACK_RE = re.compile(
     r'^(شكر[اً]?|تمام|ماشي|اوك|ok+|باي|bye|🙏|👍|✅|حسنا|ثانكس|thanks?|تم)[\W\s]*$',
     re.IGNORECASE | re.UNICODE,
 )
+# Fast pre-filter for course correction — catches it BEFORE academic signal check,
+# which would otherwise route "امسح موادي" to search because "مادة" is an academic keyword.
+_COURSE_CORRECTION_RE = re.compile(
+    r'(هذي|هذه|هذا)\s*(مو|ماهي|ليست?|مش)\s*مواد'
+    r'|امسح\s*(ال)?مواد'
+    r'|الغ\s*(ال)?مواد'
+    r'|انسى\s*(ال)?مواد'
+    r'|غلط\s*(ال)?مواد|(ال)?مواد\s*غلط'
+    r'|مو\s*موادي'
+    r'|مو\s*مسجل',
+    re.IGNORECASE | re.UNICODE,
+)
 
 _ACADEMIC_KEYWORDS = {
     "اختبار", "امتحان", "ميدترم", "فاينل", "فينال", "كويز",
@@ -833,6 +845,12 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
     # ── Layer 1: Planning queries — inventory-first, not retrieval-first ──────
     if _is_planning_query(text):
         await _handle_planning(http, chat_id, text)
+        return
+
+    # ── Layer 2: Fast course correction pre-filter — must come BEFORE academic signal
+    # check because "امسح موادي" contains "مادة" which would otherwise trigger search ──
+    if _COURSE_CORRECTION_RE.search(text):
+        await _handle_course_correction(http, chat_id)
         return
 
     # ── Layer 2: Fast academic signal (skip classifier, go straight to retrieval) ─

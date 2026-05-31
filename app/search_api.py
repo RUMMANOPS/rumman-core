@@ -487,10 +487,14 @@ async def _retrieve_intelligence_items(
         ext_params.append(("item_type", f"in.({','.join(item_types)})"))
 
     # ── Query 2: intelligence_items (real-time worker output) ────────────────
+    # Filter: no due_date (undated announcements always relevant) OR due_date >= today
+    # (prevents stale past-deadline items surfacing — intelligence_items has no valid_until column)
+    today = date.today().isoformat()
     int_params: list[tuple] = [
         ("tenant_id",  f"eq.{SEU_TENANT_ID}"),
         ("created_at", f"gte.{cutoff}"),
         ("confidence", "gte.0.65"),
+        ("or",         f"(due_date.is.null,due_date.gte.{today})"),
         ("select",     "item_type,title,description,due_date,course_code,confidence,metadata,created_at"),
         ("order",      "due_date.asc.nullslast"),
         ("limit",      "20"),

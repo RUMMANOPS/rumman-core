@@ -322,31 +322,31 @@ def build_search_params(
     if intent is None:
         return [SearchParams(query=normalized, course_code=None, source_type=None, limit=limit)]
 
-    course_code  = intent.course_codes[0] if intent.course_codes else None
+    course_codes = intent.course_codes[:3]  # cap to 3 to prevent request explosion
+    course_code  = course_codes[0] if course_codes else None
     source_type  = intent.source_type_filter
     intent_query = intent.normalized_text or normalized
 
-    # Course-specific query → search within course only (no broad fallback to
-    # prevent other courses' content bleeding in at higher similarity).
-    # Run both Arabic and English queries — corpus may be in either language.
+    # Course-specific query → search within each detected course (no broad fallback).
+    # Multiple course codes arise when the bot injects enrolled courses like
+    # "(موادي: IT362 CS251 MGT311)" — we must search all of them, not just the first.
+    # Drop source_type filter: the course constraint is already tight enough.
     if course_code:
-        # Drop source_type filter when we already have a course filter: the course
-        # constraint is tight enough, and applying source_type too often produces
-        # zero results (e.g. "ابغى ملخص MGT425" → source_type=upload, but upload
-        # chunks contain textbook slides, not summaries → sim < 0.25 → no results).
-        searches = [SearchParams(
-            query=intent_query,
-            course_code=course_code,
-            source_type=None,
-            limit=limit,
-        )]
-        if intent.english_query and intent.english_query != intent_query:
+        searches = []
+        for cc in course_codes:
             searches.append(SearchParams(
-                query=intent.english_query,
-                course_code=course_code,
+                query=intent_query,
+                course_code=cc,
                 source_type=None,
                 limit=limit,
             ))
+            if intent.english_query and intent.english_query != intent_query:
+                searches.append(SearchParams(
+                    query=intent.english_query,
+                    course_code=cc,
+                    source_type=None,
+                    limit=limit,
+                ))
         return searches
 
     # No course code → broad search

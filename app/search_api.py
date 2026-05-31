@@ -519,16 +519,17 @@ async def _run_retrieval(
     else:
         param_list = build_search_params(understanding, limit)
 
-    seen_queries: set[str] = set()
+    seen_params: set[tuple] = set()  # (query, course_code) pairs — same query for different courses must not be collapsed
     all_raw: list[dict] = []
     params_log: list[dict] = []
 
     async with httpx.AsyncClient(timeout=30) as http:
         for params in param_list:
             q = params.query
-            if q in seen_queries:
+            dedup_key = (q, params.course_code)
+            if dedup_key in seen_params:
                 continue
-            seen_queries.add(q)
+            seen_params.add(dedup_key)
 
             resp = await ai.embeddings.create(
                 model=EMBED_MODEL, input=q, dimensions=EMBED_DIMS

@@ -57,7 +57,11 @@ _PROMPTED_FOR_COURSES: set[int]              = set()
 _HISTORY_MAX_TURNS = 6
 _HISTORY_CACHE: dict[int, deque]             = {}
 
-_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b', re.IGNORECASE)
+_COURSE_CODE_RE = re.compile(
+    r'\b([A-Z]{2,6}\d{3,4})\b'          # Latin: IT362, MGT311, CS241
+    r'|\b([ء-ي]{2,4}\d{3,4})\b',        # Arabic: قنن427, قنن103
+    re.IGNORECASE | re.UNICODE,
+)
 
 # Fast pre-filter — obvious greetings/acks that never need the LLM classifier.
 # Caught before classify_message() so a classifier outage can't route them to search.
@@ -455,7 +459,7 @@ def _format_synthesis(data: dict, query: str = "") -> str:
         course_match = _COURSE_CODE_RE.search(query)
         coverage = data.get("course_coverage_level")
         if course_match:
-            code = course_match.group(1)
+            code = course_match.group(1) or course_match.group(2)
             if coverage in ("strong", "moderate"):
                 return (
                     f"عندي محتوى لمادة <b>{code}</b> لكن ما لقيت نتيجة مطابقة لسؤالك.\n\n"
@@ -543,7 +547,7 @@ async def _handle_callback(http: httpx.AsyncClient, callback_query: dict) -> Non
 async def _handle_mycourses(http: httpx.AsyncClient, chat_id: int, text: str) -> None:
     parts = text.split(None, 1)
     args  = parts[1].strip() if len(parts) > 1 else ""
-    codes = [m.upper() for m in _COURSE_CODE_RE.findall(args)]
+    codes = [(g1 or g2).upper() for g1, g2 in _COURSE_CODE_RE.findall(args) if g1 or g2]
 
     if codes:
         _ENROLLED[chat_id] = codes
@@ -664,7 +668,7 @@ _PLANNING_SYSTEM = """\
 
 def _is_planning_query(text: str) -> bool:
     """Detect high-intent multi-course context-sharing + guidance requests."""
-    codes = _COURSE_CODE_RE.findall(text)
+    codes = [g1 or g2 for g1, g2 in _COURSE_CODE_RE.findall(text) if g1 or g2]
     if len(codes) >= 3:
         return True
 
@@ -687,7 +691,7 @@ async def _handle_planning(http: httpx.AsyncClient, chat_id: int, text: str) -> 
     await _typing(http, chat_id)
 
     # ── Extract explicit course codes ──────────────────────────────────────
-    codes = [m.upper() for m in _COURSE_CODE_RE.findall(text)]
+    codes = [(g1 or g2).upper() for g1, g2 in _COURSE_CODE_RE.findall(text) if g1 or g2]
 
     # ── Extract course names via LLM when codes are absent ────────────────
     names: list[str] = []

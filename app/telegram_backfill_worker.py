@@ -26,11 +26,11 @@ SEU_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 # راوي — dedicated backfill account. Prevents AUTH_KEY_DUPLICATED with غيث (listener).
 # Generate session with: python3 auth_session.py (راوي's phone number)
-# Set TELEGRAM_RAWI_SESSION in Railway before starting the backfill service.
-_BACKFILL_SESSION = os.environ.get("TELEGRAM_RAWI_SESSION", "").strip()
+# Set TELEGRAM_BACKFILL_RAWI_SESSION in Railway before starting the backfill service.
+_BACKFILL_SESSION = os.environ.get("TELEGRAM_BACKFILL_RAWI_SESSION", "").strip()
 if not _BACKFILL_SESSION:
     print(
-        "WARN_SESSION_MISSING | TELEGRAM_RAWI_SESSION not set — "
+        "WARN_SESSION_MISSING | TELEGRAM_BACKFILL_RAWI_SESSION not set — "
         "backfill worker will not start. "
         "Generate راوي session with auth_session.py and set the env var.",
         flush=True,
@@ -770,7 +770,7 @@ async def main():
                 if not await client.is_user_authorized():
                     print(
                         f"NOT_AUTHORIZED — session expired or revoked; "
-                        f"set TELEGRAM_RAWI_SESSION in Railway; "
+                        f"set TELEGRAM_BACKFILL_RAWI_SESSION in Railway; "
                         f"retrying in 600s",
                         flush=True,
                     )

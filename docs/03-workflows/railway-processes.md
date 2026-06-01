@@ -89,9 +89,14 @@ RUMMAN runs on Railway. The Procfile defines three processes. Each is a long-run
 
 **Restart policy:** `ON_FAILURE` with max 10 retries (`railway.json`).
 
-**Environment variables:** All secrets are Railway environment variables. Never committed to git. Required: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
+**Environment variables:** All secrets are Railway environment variables. Never committed to git. Required: `TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_LISTENER_GHAYTH_SESSION`, `TELEGRAM_BACKFILL_RAWI_SESSION`, `TELEGRAM_MEDIA_IBRAHIM_SESSION`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
 
-**Session string generation:** `auth_session.py` must be run locally, not on Railway. It generates the `TELEGRAM_SESSION_STRING` via interactive Telegram login. Output is pasted into Railway Variables. The file itself is `.gitignore`'d.
+**Session string generation:** `auth_session.py` must be run locally, not on Railway. It generates a StringSession per account (غيث / راوي / إبراهيم) via interactive Telegram login. Output is pasted into Railway Variables. The file itself is `.gitignore`'d.
+
+**Session architecture:** Three dedicated accounts, one Railway var each. Never reuse a session across workers — causes `AuthKeyDuplicatedError`.
+- `TELEGRAM_LISTENER_GHAYTH_SESSION` → غيث (+966582282200) → listener process
+- `TELEGRAM_BACKFILL_RAWI_SESSION` → راوي (+966590111167) → backfill process
+- `TELEGRAM_MEDIA_IBRAHIM_SESSION` → إبراهيم (+966560064766) → media process
 
 ---
 

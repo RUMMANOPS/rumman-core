@@ -2,7 +2,7 @@
 """
 export_group_links.py — Export Telegram invite links for all known RUMMAN groups.
 
-Uses TELEGRAM_SESSION_STRING (Account #1) to connect and generate an invite link
+Uses TELEGRAM_LISTENER_GHAYTH_SESSION (غيث) to connect and generate an invite link
 for each group in the database. Public groups → t.me/username. Private groups →
 exported invite link (requires membership; does not require admin).
 
@@ -33,7 +33,7 @@ env = dotenv_values(dotenv_path=Path(__file__).parent.parent / ".env")
 
 API_ID   = int(env["TELEGRAM_API_ID"])
 API_HASH = env["TELEGRAM_API_HASH"]
-SESSION  = env["TELEGRAM_SESSION_STRING"]
+SESSION  = env["TELEGRAM_LISTENER_GHAYTH_SESSION"]
 
 SUPABASE_URL = env["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = env["SUPABASE_KEY"]
@@ -163,7 +163,7 @@ async def main():
         blocked = [r for r in results if r["link"] == ""]
 
         f.write(f"✅ Public  ({len(public)}) — join directly via link\n")
-        f.write(f"🔒 Private ({len(invite)}) — invite link (share with غيث)\n")
+        f.write(f"🔒 Private ({len(invite)}) — invite link (share with راوي / إبراهيم)\n")
         f.write(f"⚠️  Blocked ({len(blocked)}) — needs admin or not a member\n\n")
 
         f.write("─" * 70 + "\n\n")

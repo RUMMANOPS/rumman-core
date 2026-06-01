@@ -166,7 +166,7 @@ async def process_job(client, http, job):
 
 async def main():
     # audio_transcribe jobs are handled by telegram_download_worker.py (unified media handler).
-    # Running this worker simultaneously would conflict on TELEGRAM_SESSION_STRING and race
+    # Running this worker simultaneously would conflict with TELEGRAM_MEDIA_IBRAHIM_SESSION and race
     # on the same job queue. Sleep indefinitely — the process must stay alive for Railway.
     print(
         "AUDIO_WORKER_STANDBY | audio_transcribe handled by telegram_download_worker.py | sleeping",

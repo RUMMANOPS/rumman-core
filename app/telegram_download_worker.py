@@ -449,12 +449,12 @@ SESSION_NOT_AUTH_RETRY_SECONDS = 600  # retry after 10 min when session string i
 async def main():
     log("DOWNLOAD_WORKER_START", max_retries=MAX_RETRIES)
 
-    # بيان — dedicated media/OCR account.
-    worker_session = os.environ.get("TELEGRAM_BAYAN_SESSION", "").strip()
+    # إبراهيم — dedicated media/OCR account (TELEGRAM_MEDIA_IBRAHIM_SESSION).
+    worker_session = os.environ.get("TELEGRAM_MEDIA_IBRAHIM_SESSION", "").strip()
     if not worker_session:
         log("SESSION_WARNING",
-            hint="TELEGRAM_BAYAN_SESSION not set — media worker will not start; "
-                 "generate بيان session with auth_session.py and set the env var")
+            hint="TELEGRAM_MEDIA_IBRAHIM_SESSION not set — media worker will not start; "
+                 "generate إبراهيم session with auth_session.py and set the env var")
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
@@ -469,7 +469,7 @@ async def main():
 
             if not await client.is_user_authorized():
                 log("SESSION_NOT_AUTHORIZED",
-                    hint="session string expired or revoked — set TELEGRAM_BAYAN_SESSION in Railway",
+                    hint="session string expired or revoked — set TELEGRAM_MEDIA_IBRAHIM_SESSION in Railway",
                     retry_in_s=SESSION_NOT_AUTH_RETRY_SECONDS)
                 await client.disconnect()
                 await asyncio.sleep(SESSION_NOT_AUTH_RETRY_SECONDS)

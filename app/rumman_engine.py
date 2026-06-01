@@ -455,8 +455,9 @@ async def main():
 
     client = TelegramClient(
         StringSession(
-            os.environ.get("TELEGRAM_GHAYTH_SESSION")
-            or os.environ["TELEGRAM_SESSION_STRING"]  # legacy name — remove after Railway rename
+            os.environ.get("TELEGRAM_LISTENER_GHAYTH_SESSION")
+            or os.environ.get("TELEGRAM_GHAYTH_SESSION")        # prev name — remove after Railway rename
+            or os.environ["TELEGRAM_SESSION_STRING"]            # original legacy — remove after Railway rename
         ),
         int(os.environ["TELEGRAM_API_ID"]),
         os.environ["TELEGRAM_API_HASH"],

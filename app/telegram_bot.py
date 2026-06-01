@@ -980,7 +980,7 @@ async def _try_restore_enrollment(http: httpx.AsyncClient, chat_id: int, user_id
     try:
         r = await http.get(
             f"{SEARCH_API_URL}/v1/users/{user_id}/context",
-            timeout=3,
+            timeout=4,
         )
         if r.status_code != 200:
             return

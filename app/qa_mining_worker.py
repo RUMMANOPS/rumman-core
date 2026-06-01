@@ -225,18 +225,21 @@ async def fetch_existing_fingerprints(
     Fetch content hashes of existing QA chunks for this chat to avoid duplicates.
     We store fingerprint in document_chunks.metadata->>'qa_fingerprint'.
     """
-    r = await http.get(
-        f"{SUPABASE_URL}/rest/v1/document_chunks",
-        headers=HEADERS,
-        params=[
-            ("select", "metadata"),
-            ("source_type", "eq.telegram_export"),
-            ("chat_name", f"eq.{chat_name}"),
-            ("limit", "5000"),
-        ],
-    )
-    if r.status_code >= 400:
-        return set()
+    try:
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/document_chunks",
+            headers=HEADERS,
+            params=[
+                ("select", "metadata"),
+                ("source_type", "eq.telegram_export"),
+                ("chat_name", f"eq.{chat_name}"),
+                ("limit", "5000"),
+            ],
+        )
+        if r.status_code >= 400:
+            return set()
+    except Exception:
+        return set()  # transient network error; DB unique constraint prevents true duplicates
 
     fps: set[str] = set()
     for row in r.json():
@@ -555,13 +558,16 @@ async def main():
         total_cost  = 0.0
 
         for chat_name in chat_names:
-            result = await process_chat(
-                ai, http, chat_name,
-                window_limit=args.limit,
-                dry_run=args.dry_run,
-            )
-            total_pairs += result["pairs"]
-            total_cost  += result["cost_usd"]
+            try:
+                result = await process_chat(
+                    ai, http, chat_name,
+                    window_limit=args.limit,
+                    dry_run=args.dry_run,
+                )
+                total_pairs += result["pairs"]
+                total_cost  += result["cost_usd"]
+            except Exception as exc:
+                log("CHAT_ERROR", chat=chat_name, error=str(exc)[:120])
 
         log("QA_MINER_DONE",
             chats=len(chat_names),

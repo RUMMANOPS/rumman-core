@@ -449,17 +449,18 @@ SESSION_NOT_AUTH_RETRY_SECONDS = 600  # retry after 10 min when session string i
 async def main():
     log("DOWNLOAD_WORKER_START", max_retries=MAX_RETRIES)
 
-    worker_session = os.environ.get("TELEGRAM_WORKER_SESSION_STRING", "").strip()
+    # بيان — dedicated media/OCR account.
+    worker_session = os.environ.get("TELEGRAM_BAYAN_SESSION", "").strip()
     if not worker_session:
         log("SESSION_WARNING",
-            hint="TELEGRAM_WORKER_SESSION_STRING not set — falling back to TELEGRAM_SESSION_STRING; "
-                 "AuthKeyDuplicatedError expected if listener is running on same session")
+            hint="TELEGRAM_BAYAN_SESSION not set — media worker will not start; "
+                 "generate بيان session with auth_session.py and set the env var")
 
     ai = AsyncOpenAI(api_key=OPENAI_API_KEY)
 
     while True:
         client = TelegramClient(
-            StringSession(worker_session or os.environ["TELEGRAM_SESSION_STRING"]),
+            StringSession(worker_session),
             int(os.environ["TELEGRAM_API_ID"]),
             os.environ["TELEGRAM_API_HASH"],
         )
@@ -468,7 +469,7 @@ async def main():
 
             if not await client.is_user_authorized():
                 log("SESSION_NOT_AUTHORIZED",
-                    hint="session string expired or revoked — set TELEGRAM_WORKER_SESSION_STRING in Railway",
+                    hint="session string expired or revoked — set TELEGRAM_BAYAN_SESSION in Railway",
                     retry_in_s=SESSION_NOT_AUTH_RETRY_SECONDS)
                 await client.disconnect()
                 await asyncio.sleep(SESSION_NOT_AUTH_RETRY_SECONDS)

@@ -454,7 +454,10 @@ async def main():
     print("\nRUMMAN ENGINE STARTING...\n")
 
     client = TelegramClient(
-        StringSession(os.environ["TELEGRAM_SESSION_STRING"]),
+        StringSession(
+            os.environ.get("TELEGRAM_GHAYTH_SESSION")
+            or os.environ["TELEGRAM_SESSION_STRING"]  # legacy name — remove after Railway rename
+        ),
         int(os.environ["TELEGRAM_API_ID"]),
         os.environ["TELEGRAM_API_HASH"],
     )

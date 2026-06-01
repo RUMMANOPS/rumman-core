@@ -53,10 +53,10 @@ Deployed on Railway. `Procfile` defines **eight independent processes** — they
 | `intelligence` | `app/intelligence_worker.py` | Extract operational items (assignments, deadlines) from messages → `intelligence_items`. | Gated: `INTELLIGENCE_WORKER_ENABLED=true` |
 | `attribution` | `app/attribution_worker.py` | AI-assisted course attribution for untagged document chunks → `machine_asserted`. | Gated: `ATTRIBUTION_WORKER_ENABLED=true` |
 
-**Note on session architecture (three distinct StringSessions):**
-- `TELEGRAM_SESSION_STRING` — personal account; used by `listener` (rumman_engine.py)
-- `TELEGRAM_BACKFILL_SESSION_STRING` — personal account #2; used by `backfill` (telegram_backfill_worker.py)
-- `TELEGRAM_WORKER_SESSION_STRING` — RUMMAN/غيث dedicated number; used by `media` (telegram_download_worker.py)
+**Note on session architecture (three distinct StringSessions — identity-based names):**
+- `TELEGRAM_GHAYTH_SESSION` (غيث) — passive listener account; used by `listener` (rumman_engine.py). Backward-compat fallback: `TELEGRAM_SESSION_STRING` still accepted during transition.
+- `TELEGRAM_RAWI_SESSION` (راوي) — dedicated backfill account; used by `backfill` (telegram_backfill_worker.py)
+- `TELEGRAM_BAYAN_SESSION` (بيان) — media/OCR/file-download account; used by `media` (telegram_download_worker.py)
 
 Never run two processes on the same StringSession simultaneously — causes `AuthKeyDuplicatedError`.
 
@@ -70,7 +70,7 @@ Never run two processes on the same StringSession simultaneously — causes `Aut
 | `app/query_handler.py` | CLI + importable module: synthesize course intelligence from all layers | Development/debug tool; not a service |
 | `app/qa_mining_worker.py` | Extract Q&A pairs from 72K Telegram messages → embed → `document_chunks` | Run on demand; requires migration 026+027 |
 
-`auth_session.py` is a one-shot local helper to generate `TELEGRAM_SESSION_STRING` — gitignored, never runs on Railway.
+`auth_session.py` is a one-shot local helper to generate session strings for غيث/راوي/بيان — gitignored, never runs on Railway.
 
 ## The Cardinal Architectural Rule
 
@@ -186,7 +186,9 @@ python3 auth_session.py                            # generate session string (LO
 
 ## Required Environment
 
-`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_SESSION_STRING`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
+`TELEGRAM_API_ID`, `TELEGRAM_API_HASH`, `TELEGRAM_GHAYTH_SESSION`, `TELEGRAM_RAWI_SESSION`, `TELEGRAM_BAYAN_SESSION`, `SUPABASE_URL`, `SUPABASE_KEY`, `OPENAI_API_KEY`.
+
+Legacy: `TELEGRAM_SESSION_STRING` still accepted by `listener` as fallback — rename in Railway when ready.
 
 Optional: `WORKER_ID`, `BACKFILL_SLEEP_SECONDS`, `BACKFILL_LEASE_MINUTES`, `RUMMAN_USER_SALT`, `SEARCH_API_URL`.
 

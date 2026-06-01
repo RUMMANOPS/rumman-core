@@ -101,6 +101,7 @@ _ACADEMIC_KEYWORDS = {
 _EXAM_KEYWORDS = {
     "فاينل", "فينال", "ميدترم", "final", "midterm",
     "اختبار", "امتحان", "تجميع", "تجميعات",
+    "ملخص", "ملخصات",
 }
 
 _COURSE_NUDGE = (

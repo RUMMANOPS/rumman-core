@@ -182,6 +182,7 @@ async def gather_metrics(http: httpx.AsyncClient) -> dict:
     m["total_chunks"]        = await _count(http, "document_chunks", {})
     m["embedded_chunks"]     = await _count(http, "document_chunks", {"embedding": "not.is.null"})
     m["unattributed_chunks"] = await _count(http, "document_chunks", {"course_code": "is.null"})
+    m["qa_pair_chunks"]      = await _count(http, "document_chunks", {"source_type": "eq.telegram_export"})
 
     # ── Course intelligence profiles ──────────────────────────────────────────
     cov_rows = await _fetch_all(http, "course_intelligence_profiles", {}, "coverage_level",
@@ -291,10 +292,12 @@ def format_report(m: dict) -> str:
             lines.append(f"  {course}: {n}x")
 
     # Corpus
-    total  = m.get("total_chunks", 0)
-    unatr  = m.get("unattributed_chunks", 0)
+    total    = m.get("total_chunks", 0)
+    unatr    = m.get("unattributed_chunks", 0)
+    qa_pairs = m.get("qa_pair_chunks", 0)
     unatr_pct = round(100 * unatr / total, 1) if total > 0 else 0
     lines.append(f"\n<b>CORPUS</b>  {total:,} chunks  |  {unatr:,} unattributed ({unatr_pct}%)")
+    lines.append(f"  QA pairs (mined):  {qa_pairs:,}")
 
     # Course intelligence
     cov = m.get("course_coverage", {})

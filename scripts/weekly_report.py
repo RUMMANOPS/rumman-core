@@ -47,207 +47,193 @@ HEADERS = {
 WEEK_AGO = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
 
-async def query(http: httpx.AsyncClient, sql: str) -> list[dict]:
-    """Run a SQL query via Supabase PAT management API."""
-    pat = os.getenv("SUPABASE_PAT", "")
-    if not pat:
-        # Fall back to PostgREST for simple queries — but management API is needed for SQL
-        raise RuntimeError("SUPABASE_PAT required for weekly_report.py")
-    r = await http.post(
-        f"https://api.supabase.com/v1/projects/yriavgczteuirigsvedu/database/query",
-        headers={
-            "Authorization": f"Bearer {pat}",
-            "Content-Type":  "application/json",
-        },
-        json={"query": sql},
-        timeout=30,
+async def _count(http: httpx.AsyncClient, table: str, params: dict,
+                 count_col: str = "id") -> int:
+    """Return exact count for a PostgREST query."""
+    r = await http.get(
+        f"{SUPABASE_URL}/rest/v1/{table}",
+        headers={**HEADERS, "Prefer": "count=exact"},
+        params={**params, "select": count_col, "limit": "1"},
     )
-    r.raise_for_status()
-    return r.json()
+    cr = r.headers.get("content-range", "?")
+    return int(cr.split("/")[-1]) if "/" in cr and cr.split("/")[-1].isdigit() else 0
+
+
+async def _fetch_all(http: httpx.AsyncClient, table: str, params: dict, select: str,
+                     since: str = None, order_col: str = "id.asc") -> list[dict]:
+    """Paginate all rows matching params since given ISO timestamp."""
+    rows: list[dict] = []
+    offset = 0
+    PAGE = 1000
+    base = {**params, "select": select, "limit": str(PAGE), "order": order_col}
+    if since:
+        base["occurred_at"] = f"gte.{since}"
+    while True:
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/{table}",
+            headers=HEADERS,
+            params={**base, "offset": str(offset)},
+        )
+        page = r.json() if isinstance(r.json(), list) else []
+        rows.extend(page)
+        offset += len(page)
+        if len(page) < PAGE:
+            break
+    return rows
 
 
 async def gather_metrics(http: httpx.AsyncClient) -> dict:
     m = {}
 
     # ── Pipeline health ───────────────────────────────────────────────────────
-
-    rows = await query(http, """
-        SELECT job_type, status, COUNT(*) as n
-        FROM processing_jobs
-        GROUP BY job_type, status
-    """)
-    pending, failed = {}, {}
-    for r in rows:
-        if r["status"] == "pending":
-            pending[r["job_type"]] = pending.get(r["job_type"], 0) + int(r["n"])
-        elif r["status"] == "failed":
-            failed[r["job_type"]] = failed.get(r["job_type"], 0) + int(r["n"])
+    pending: dict = {}
+    failed: dict  = {}
+    for jtype in ("telegram_media", "audio_transcribe", "embed_chunk", "pdf_extract"):
+        pending[jtype] = await _count(http, "processing_jobs",
+                                      {"job_type": f"eq.{jtype}", "status": "eq.pending"})
+        failed[jtype]  = await _count(http, "processing_jobs",
+                                      {"job_type": f"eq.{jtype}", "status": "eq.failed"})
     m["pending"] = pending
     m["failed"]  = failed
 
     # ── Backfill progress ─────────────────────────────────────────────────────
-
-    rows = await query(http, """
-        SELECT status, COUNT(*) as n FROM telegram_backfill_jobs GROUP BY status
-    """)
-    m["backfill"] = {r["status"]: int(r["n"]) for r in rows}
+    bf: dict = {}
+    for status in ("pending", "running", "completed"):
+        bf[status] = await _count(http, "telegram_backfill_jobs", {"status": f"eq.{status}"})
+    m["backfill"] = bf
 
     # ── Messages ingested this week ───────────────────────────────────────────
-
-    rows = await query(http, f"""
-        SELECT COUNT(*) as n FROM messages WHERE created_at >= '{WEEK_AGO}'
-    """)
-    m["messages_this_week"] = int(rows[0]["n"]) if rows else 0
+    m["messages_this_week"] = await _count(http, "messages",
+                                           {"created_at": f"gte.{WEEK_AGO}"})
 
     # ── Query volume + grounding ──────────────────────────────────────────────
+    synth_events = await _fetch_all(
+        http, "learning_events",
+        {"event_type": "eq.synthesis"},
+        "latency_ms,metadata",
+        since=WEEK_AGO,
+    )
+    zero_events = await _fetch_all(
+        http, "learning_events",
+        {"event_type": "eq.zero_result"},
+        "query_raw,course_codes",
+        since=WEEK_AGO,
+    )
 
-    rows = await query(http, f"""
-        SELECT
-            COUNT(*) FILTER (WHERE event_type IN ('query','synthesis'))                      AS total_queries,
-            COUNT(*) FILTER (WHERE event_type = 'zero_result')                               AS zero_results,
-            ROUND(AVG(latency_ms) FILTER (WHERE event_type='synthesis')::numeric, 0)         AS avg_latency_ms,
-            PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY latency_ms)
-                FILTER (WHERE event_type='synthesis' AND latency_ms IS NOT NULL)             AS p95_latency_ms
-        FROM learning_events
-        WHERE occurred_at >= '{WEEK_AGO}'
-    """)
-    r = rows[0] if rows else {}
-    m["queries"]      = int(r.get("total_queries") or 0)
-    m["zero_results"] = int(r.get("zero_results") or 0)
-    m["avg_latency"]  = int(r.get("avg_latency_ms") or 0)
-    m["p95_latency"]  = int(float(r.get("p95_latency_ms") or 0))
+    latencies = [e["latency_ms"] for e in synth_events if e.get("latency_ms")]
+    avg_latency = int(sum(latencies) / len(latencies)) if latencies else 0
+    p95_latency = 0
+    if latencies:
+        latencies_sorted = sorted(latencies)
+        p95_idx = int(len(latencies_sorted) * 0.95)
+        p95_latency = latencies_sorted[min(p95_idx, len(latencies_sorted) - 1)]
 
-    # ── Zero-result rate by course ────────────────────────────────────────────
+    mini_tokens = premium_tokens = cache_hits = 0
+    for e in synth_events:
+        meta = e.get("metadata") or {}
+        if isinstance(meta, str):
+            try:
+                meta = json.loads(meta)
+            except Exception:
+                meta = {}
+        toks = int(meta.get("synthesis_tokens") or 0)
+        model = meta.get("synthesis_model") or ""
+        if "mini" in model:
+            mini_tokens += toks
+        elif "gpt-4o" in model:
+            premium_tokens += toks
+        if meta.get("cache_hit") == "true" or meta.get("cache_hit") is True:
+            cache_hits += 1
 
-    rows = await query(http, f"""
-        SELECT
-            UNNEST(course_codes) AS course,
-            COUNT(*) AS n
-        FROM learning_events
-        WHERE event_type = 'zero_result'
-          AND occurred_at >= '{WEEK_AGO}'
-          AND ARRAY_LENGTH(course_codes, 1) > 0
-        GROUP BY course
-        ORDER BY n DESC
-        LIMIT 5
-    """)
-    m["zero_by_course"] = [(r["course"], int(r["n"])) for r in rows]
-
-    # ── Top unmet queries (zero-result, recurring) ────────────────────────────
-
-    rows = await query(http, f"""
-        SELECT query_raw, COUNT(*) AS n
-        FROM learning_events
-        WHERE event_type = 'zero_result'
-          AND occurred_at >= '{WEEK_AGO}'
-          AND query_raw IS NOT NULL
-        GROUP BY query_raw
-        HAVING COUNT(*) >= 2
-        ORDER BY n DESC
-        LIMIT 8
-    """)
-    m["unmet_queries"] = [(r["query_raw"], int(r["n"])) for r in rows]
-
-    # ── OpenAI cost estimate ──────────────────────────────────────────────────
-
-    rows = await query(http, f"""
-        SELECT
-            SUM((metadata->>'synthesis_tokens')::int)
-                FILTER (WHERE metadata->>'synthesis_model' LIKE 'gpt-4o-mini%') AS mini_tokens,
-            SUM((metadata->>'synthesis_tokens')::int)
-                FILTER (WHERE metadata->>'synthesis_model' LIKE 'gpt-4o%'
-                          AND metadata->>'synthesis_model' NOT LIKE 'gpt-4o-mini%') AS premium_tokens,
-            COUNT(*) FILTER (WHERE event_type='synthesis') AS synthesis_calls,
-            COUNT(*) FILTER (WHERE metadata->>'cache_hit' = 'true') AS cache_hits
-        FROM learning_events
-        WHERE occurred_at >= '{WEEK_AGO}'
-    """)
-    r = rows[0] if rows else {}
-    mini_tokens    = int(r.get("mini_tokens") or 0)
-    premium_tokens = int(r.get("premium_tokens") or 0)
-    synth_calls    = int(r.get("synthesis_calls") or 0)
-    cache_hits     = int(r.get("cache_hits") or 0)
-    # gpt-4o-mini: ~$0.15/1M input + $0.60/1M output ≈ $0.30/1M blended
-    # gpt-4o:      ~$2.50/1M input + $10/1M output  ≈ $5.00/1M blended
-    # intent classification (gpt-4o-mini): ~400 tokens each
+    synth_calls = len(synth_events)
     intent_cost  = synth_calls * 400 * 0.30 / 1_000_000
     mini_cost    = mini_tokens    * 0.30 / 1_000_000
     premium_cost = premium_tokens * 5.00 / 1_000_000
+
+    m["queries"]        = synth_calls + len(zero_events)
+    m["zero_results"]   = len(zero_events)
+    m["avg_latency"]    = avg_latency
+    m["p95_latency"]    = int(p95_latency)
     m["est_cost_usd"]   = round(intent_cost + mini_cost + premium_cost, 4)
     m["synth_calls"]    = synth_calls
     m["cache_hits"]     = cache_hits
     m["mini_tokens"]    = mini_tokens
     m["premium_tokens"] = premium_tokens
 
-    # ── Corpus coverage ───────────────────────────────────────────────────────
+    # ── Zero-result rate by course ────────────────────────────────────────────
+    from collections import Counter
+    course_counts: Counter = Counter()
+    for e in zero_events:
+        codes = e.get("course_codes") or []
+        for c in codes:
+            if c:
+                course_counts[c] += 1
+    m["zero_by_course"] = course_counts.most_common(5)
 
-    rows = await query(http, """
-        SELECT COUNT(*) AS total, COUNT(*) FILTER (WHERE embedding IS NOT NULL) AS embedded,
-               COUNT(*) FILTER (WHERE course_code IS NULL) AS unattributed
-        FROM document_chunks
-    """)
-    r = rows[0] if rows else {}
-    m["total_chunks"]       = int(r.get("total") or 0)
-    m["embedded_chunks"]    = int(r.get("embedded") or 0)
-    m["unattributed_chunks"]= int(r.get("unattributed") or 0)
+    # ── Top unmet queries (zero-result, recurring) ────────────────────────────
+    query_counts: Counter = Counter()
+    for e in zero_events:
+        q = (e.get("query_raw") or "").strip()
+        if q:
+            query_counts[q] += 1
+    m["unmet_queries"] = [(q, n) for q, n in query_counts.most_common(8) if n >= 2]
+
+    # ── Corpus coverage ───────────────────────────────────────────────────────
+    m["total_chunks"]        = await _count(http, "document_chunks", {})
+    m["embedded_chunks"]     = await _count(http, "document_chunks", {"embedding": "not.is.null"})
+    m["unattributed_chunks"] = await _count(http, "document_chunks", {"course_code": "is.null"})
 
     # ── Course intelligence profiles ──────────────────────────────────────────
-
-    rows = await query(http, """
-        SELECT coverage_level, COUNT(*) AS n
-        FROM course_intelligence_profiles
-        GROUP BY coverage_level
-    """)
-    m["course_coverage"] = {r["coverage_level"]: int(r["n"]) for r in rows}
-
-    rows = await query(http, f"""
-        SELECT COUNT(*) AS n FROM exam_intelligence
-        WHERE tenant_id = '{SEU_TENANT_ID}'
-    """)
-    m["exam_signals"] = int(rows[0]["n"]) if rows else 0
+    cov_rows = await _fetch_all(http, "course_intelligence_profiles", {}, "coverage_level",
+                                order_col="course_code.asc")
+    cov: dict = {}
+    for row in cov_rows:
+        level = row.get("coverage_level") or "none"
+        cov[level] = cov.get(level, 0) + 1
+    m["course_coverage"] = cov
+    m["exam_signals"]    = await _count(http, "exam_intelligence",
+                                        {"tenant_id": f"eq.{SEU_TENANT_ID}"})
 
     # ── Message signals ───────────────────────────────────────────────────────
-
-    rows = await query(http, f"""
-        SELECT signal_type, COUNT(*) AS n
-        FROM message_signals
-        WHERE tenant_id = '{SEU_TENANT_ID}'
-        GROUP BY signal_type
-    """)
-    m["msg_signals_by_type"] = {r["signal_type"]: int(r["n"]) for r in rows}
-
-    rows = await query(http, f"""
-        SELECT COUNT(*) AS n FROM message_signals
-        WHERE tenant_id = '{SEU_TENANT_ID}' AND is_current_semester = TRUE
-    """)
-    m["msg_signals_current"] = int(rows[0]["n"]) if rows else 0
+    sig_rows = await _fetch_all(http, "message_signals",
+                                {"tenant_id": f"eq.{SEU_TENANT_ID}"}, "signal_type,is_current_semester")
+    sig_by_type: dict = {}
+    sig_current = 0
+    for row in sig_rows:
+        t = row.get("signal_type") or "unknown"
+        sig_by_type[t] = sig_by_type.get(t, 0) + 1
+        if row.get("is_current_semester"):
+            sig_current += 1
+    m["msg_signals_by_type"] = sig_by_type
+    m["msg_signals_current"] = sig_current
 
     # ── Worker heartbeat health ───────────────────────────────────────────────
-
-    rows = await query(http, """
-        SELECT worker_id, service_name, status, last_seen_at,
-               EXTRACT(EPOCH FROM (NOW() - last_seen_at)) AS seconds_since
-        FROM worker_heartbeats
-        ORDER BY last_seen_at DESC
-    """)
+    now_utc = datetime.now(timezone.utc)
+    hb_rows = await _fetch_all(http, "worker_heartbeats", {}, "worker_id,service_name,status,last_seen_at",
+                               order_col="last_seen_at.desc")
     stale_workers = []
     healthy_workers = []
-    for r in rows:
-        age_min = float(r.get("seconds_since") or 0) / 60
-        if age_min > 30:
-            stale_workers.append((r["worker_id"], age_min))
+    for row in hb_rows:
+        ts = row.get("last_seen_at") or ""
+        try:
+            last_seen = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            age_min = (now_utc - last_seen).total_seconds() / 60
+        except Exception:
+            age_min = 9999
+        wid = row.get("worker_id") or row.get("service_name") or "?"
+        if age_min > 120:
+            stale_workers.append((wid, age_min))
         else:
-            healthy_workers.append((r["worker_id"], r.get("status", "?")))
+            healthy_workers.append((wid, row.get("status", "?")))
     m["stale_workers"]   = stale_workers
     m["healthy_workers"] = healthy_workers
 
     # ── Stale backfill jobs (running but lease expired) ───────────────────────
-
-    rows = await query(http, """
-        SELECT COUNT(*) AS n FROM telegram_backfill_jobs
-        WHERE status = 'running' AND lease_expires_at < NOW()
-    """)
-    m["stale_backfill_jobs"] = int(rows[0]["n"]) if rows else 0
+    lease_cutoff = (now_utc - timedelta(hours=2)).isoformat()
+    m["stale_backfill_jobs"] = await _count(
+        http, "telegram_backfill_jobs",
+        {"status": "eq.running", "lease_expires_at": f"lt.{lease_cutoff}"},
+    )
 
     return m
 

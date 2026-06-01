@@ -53,7 +53,11 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
-COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\s*\d{3,4})\b', re.IGNORECASE)
+COURSE_CODE_RE = re.compile(
+    r'\b([A-Z]{2,6}\s*\d{3,4})\b'    # Latin: IT362, MGT311, ECOM101
+    r'|\b([ء-ي]{2,4}\d{3,4})\b',      # Arabic: قنن427, قنن103
+    re.IGNORECASE | re.UNICODE,
+)
 EXAM_KEYWORDS  = re.compile(r'\b(final|midterm|quiz|exam|اختبار|نهائي|منتصف|كويز)\b', re.IGNORECASE)
 
 
@@ -71,7 +75,10 @@ def detect_course_code(text: str) -> Optional[str]:
     if not text:
         return None
     m = COURSE_CODE_RE.search(text)
-    return m.group(1).upper().replace(" ", "") if m else None
+    if not m:
+        return None
+    code = m.group(1) or m.group(2)
+    return code.upper().replace(" ", "") if code else None
 
 
 def detect_exam_type(text: str) -> Optional[str]:

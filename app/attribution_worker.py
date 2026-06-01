@@ -43,8 +43,12 @@ MAX_TOKENS_PER_RUN   = int(os.getenv("ATTRIBUTION_MAX_TOKENS_PER_RUN", "500_000"
 MAX_DAILY_CALLS      = int(os.getenv("ATTRIBUTION_MAX_DAILY_CALLS", "3000"))
 
 # Regex-first: attribute chunks where a single SEU course code is explicit in the text.
-# Saves AI calls; pattern: 2-6 uppercase letters followed by exactly 3 digits.
-_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3})\b')
+# Saves AI calls. Matches both Latin (IT362, MGT311) and Arabic-script (قنن427, قنن103) codes.
+_COURSE_CODE_RE = re.compile(
+    r'\b([A-Z]{2,6}\d{3})\b'        # Latin: IT362, MGT311, ECOM101
+    r'|\b([ء-ي]{2,4}\d{3,4})\b',    # Arabic: قنن427, قنن103
+    re.UNICODE,
+)
 
 _ENABLED = os.getenv("ATTRIBUTION_WORKER_ENABLED", "").strip().lower() == "true"
 
@@ -82,7 +86,8 @@ def log(event: str, **kwargs):
 
 def regex_attribute(content: str) -> tuple[str | None, float]:
     """Return (course_code, 1.0) if exactly one SEU code appears explicitly in the text."""
-    codes = list(set(_COURSE_CODE_RE.findall((content or "")[:1200])))
+    raw = _COURSE_CODE_RE.findall((content or "")[:1200])
+    codes = list({(g1 or g2).upper() for g1, g2 in raw if g1 or g2})
     if len(codes) == 1:
         return codes[0], 1.0
     return None, 0.0

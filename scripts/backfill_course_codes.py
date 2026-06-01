@@ -38,9 +38,12 @@ HEADERS = {
 }
 HEADERS_REP = {**HEADERS, "Prefer": "return=representation"}
 
-# Course code pattern: 2-4 uppercase letters + 3 digits + optional letter
-# Matches: IT362, MGT425, ENG103, ECOM101, MATH150, CS231, DS242, etc.
-_COURSE_RE = re.compile(r'\b([A-Z]{2,4}\d{3}[A-Z]?)\b')
+# Course code pattern — Latin (IT362, MGT425) and Arabic-script (قنن427) codes.
+_COURSE_RE = re.compile(
+    r'\b([A-Z]{2,4}\d{3}[A-Z]?)\b'      # Latin: IT362, MGT425, ECOM101
+    r'|\b([ء-ي]{2,4}\d{3,4})\b',         # Arabic: قنن427, قنن103
+    re.UNICODE,
+)
 
 # Known-good codes from the corpus (extracted from document_chunks)
 KNOWN_CODES = {
@@ -75,7 +78,9 @@ def regex_extract(text: str) -> Optional[str]:
     """Extract a course code via regex from filename or text snippet."""
     if not text:
         return None
-    matches = _COURSE_RE.findall(text.upper())
+    raw = _COURSE_RE.findall(text.upper())
+    # findall returns (latin_group, arabic_group) tuples; pick the non-empty group
+    matches = [(g1 or g2) for g1, g2 in raw if g1 or g2]
     for m in matches:
         if m in KNOWN_CODES:
             return m

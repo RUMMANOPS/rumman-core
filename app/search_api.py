@@ -281,7 +281,7 @@ async def _retrieve(
             "match_count":     match_count,
             "filter_course":   course_code,
             "filter_type":     source_type,
-            # filter_tenant added after migration 034 is applied in Supabase
+            "filter_tenant":   SEU_TENANT_ID,
         },
     )
     if r.status_code >= 400:

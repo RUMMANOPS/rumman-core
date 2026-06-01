@@ -59,34 +59,92 @@ def coverage_level(total: int, exam: int) -> str:
 
 def fetch_chunk_aggregates(http: httpx.Client, course_code=None) -> list[dict]:
     """
-    Fetch per-course chunk counts grouped by source_type using SQL aggregation
-    via the Supabase management API (bypasses PostgREST 1,000-row limit).
+    Fetch per-course chunk counts grouped by source_type.
+
+    Primary: Supabase management API (single aggregated SQL query).
+    Fallback: paginated PostgREST when SUPABASE_PAT is not set — fetches
+              course_code + source_type + ingested_at in pages of 10K and
+              aggregates in Python. Slower but requires no management token.
+
     Returns list of {course_code, source_type, chunk_count, last_indexed_at}.
     """
-    course_filter = f"AND course_code = '{course_code}'" if course_code else ""
-    sql = f"""
-        SELECT
-            course_code,
-            source_type,
-            COUNT(*) AS chunk_count,
-            MAX(ingested_at) AS last_indexed_at
-        FROM document_chunks
-        WHERE (tenant_id = '{SEU_TENANT_ID}' OR tenant_id IS NULL)
-            AND course_code IS NOT NULL
-            {course_filter}
-        GROUP BY course_code, source_type
-        ORDER BY course_code, source_type;
-    """
-    r = http.post(
-        f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
-        headers=MGMT_HEADERS,
-        json={"query": sql},
-        timeout=60,
-    )
-    if r.status_code >= 400:
-        print(f"ERROR running aggregate query: {r.status_code} {r.text[:300]}")
-        sys.exit(1)
-    return r.json()
+    if SUPABASE_PAT:
+        course_filter = f"AND course_code = '{course_code}'" if course_code else ""
+        sql = f"""
+            SELECT
+                course_code,
+                source_type,
+                COUNT(*) AS chunk_count,
+                MAX(ingested_at) AS last_indexed_at
+            FROM document_chunks
+            WHERE (tenant_id = '{SEU_TENANT_ID}' OR tenant_id IS NULL)
+                AND course_code IS NOT NULL
+                {course_filter}
+            GROUP BY course_code, source_type
+            ORDER BY course_code, source_type;
+        """
+        r = http.post(
+            f"https://api.supabase.com/v1/projects/{SUPABASE_REF}/database/query",
+            headers=MGMT_HEADERS,
+            json={"query": sql},
+            timeout=60,
+        )
+        if r.status_code >= 400:
+            print(f"ERROR running aggregate query: {r.status_code} {r.text[:300]}")
+            sys.exit(1)
+        return r.json()
+
+    # PostgREST fallback — paginate in batches, aggregate in Python.
+    # Supabase caps each response at 1,000 rows; iterate until an empty page.
+    print("  SUPABASE_PAT not set — using PostgREST pagination fallback (slower)")
+    PAGE_SIZE = 1000
+    offset = 0
+    raw_chunks: list[dict] = []
+    params_base: dict = {
+        "course_code": "not.is.null",
+        "select": "course_code,source_type,ingested_at",
+        "limit": str(PAGE_SIZE),
+        "order": "course_code.asc,chunk_index.asc",
+    }
+    if course_code:
+        params_base["course_code"] = f"eq.{course_code}"
+
+    tenant_headers = {**HEADERS}
+    while True:
+        params = {**params_base, "offset": str(offset)}
+        r = http.get(
+            f"{SUPABASE_URL}/rest/v1/document_chunks",
+            headers=tenant_headers,
+            params=params,
+            timeout=60,
+        )
+        if r.status_code >= 400:
+            print(f"ERROR fetching chunks page at offset={offset}: {r.status_code} {r.text[:200]}")
+            sys.exit(1)
+        page = r.json()
+        if not page:
+            break
+        raw_chunks.extend(page)
+        offset += len(page)
+        if offset % 10000 == 0:
+            print(f"  Fetched {offset:,} chunks so far...")
+        if len(page) < PAGE_SIZE:
+            break
+
+    # Convert to the same shape as the management API response
+    from collections import defaultdict
+    agg: dict[tuple, dict] = defaultdict(lambda: {"chunk_count": 0, "last_indexed_at": ""})
+    for chunk in raw_chunks:
+        key = (chunk.get("course_code"), chunk.get("source_type"))
+        agg[key]["chunk_count"] += 1
+        ts = chunk.get("ingested_at") or ""
+        if ts > agg[key]["last_indexed_at"]:
+            agg[key]["last_indexed_at"] = ts
+
+    return [
+        {"course_code": cc, "source_type": st, **vals}
+        for (cc, st), vals in agg.items()
+    ]
 
 
 def aggregate(rows: list[dict]) -> dict[str, dict]:

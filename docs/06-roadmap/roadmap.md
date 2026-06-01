@@ -43,25 +43,32 @@ The original Phase 1 goal was ingestion stabilization. The system evolved furthe
 
 ## Phase 2: Institutional Intelligence
 
-Status: **In Progress** *(core infrastructure live; official docs not yet ingested)*
+Status: **Complete** *(as of 2026-06-01)*
 
 The transition from search-over-community-content to grounded institutional + community intelligence.
 
-### Already Completed (as of 2026-05-30)
+### Completed
 
 - **Structured query path** — `search_api.py` queries `inst_courses` directly for course codes detected in queries, bypassing vector search (exact match, similarity=0.95)
 - **Academic calendar layer** — `search_api.py` injects calendar events for `exam_schedule`/`deadline` intents
 - **Intelligence layer** — `active_extracted_items` view feeds synthesis for course-specific and temporal queries
-- **Course data** — 161 courses seeded in `inst_courses` (renamed from `seu_*` for multi-tenancy)
+- **Course data** — 161 courses seeded in `inst_courses`; name_ar populated for all courses including MGT425 and FIN416
 - **Claim model** — `valid_from/valid_until/superseded_by` on `document_chunks` and `extracted_items` (migration 025)
 - **Gap analyst** — `scripts/gap_analyst.py` clusters zero-result events into actionable gaps
 - **QA mining** — `app/qa_mining_worker.py` extracts implicit Q&A from 72K Telegram messages
+- **Official document corpus** — 153 files bulk-ingested (all regulations, study plans, course syllabi, diplomas). Confirmed complete 2026-06-01.
+- **Intelligence worker** — LIVE with `INTELLIGENCE_WORKER_ENABLED=true`; processes new messages continuously
+- **Attribution worker** — LIVE with `ATTRIBUTION_WORKER_ENABLED=true`; budget 8M tokens/run
+- **College tagging** — `inst_colleges.telegram_chat_ids` populated for all 5 colleges; wired in `rumman_engine.py`
+- **Session architecture** — Three dedicated Telegram accounts: غيث (listener), راوي (backfill), إبراهيم (media)
+- **Message signals** — 1,000+ signals extracted (exam_emphasis, difficulty, professor_note, resource_rec, confusion_cluster)
+- **Corpus** — 120K+ document_chunks, all embedded; 263 exam_intelligence records; 338 course_intelligence_profiles
 
-### Remaining
+### Open Items (not blocking Phase 3)
 
-- **Official document corpus** — 93 files in university repository not yet bulk-ingested (`batch_ingest_seu.py` ready)
-- **Intelligence worker** — `intelligence_worker.py` in Procfile but gated behind `INTELLIGENCE_WORKER_ENABLED=true`
-- **College tagging** — Telegram `chat_id` → college mapping exists in `inst_colleges.telegram_chat_ids`; wiring complete in `rumman_engine.py` but mapping not yet populated in DB
+- MGT425 and FIN416 still exam-heavy — official PDF materials needed to close content gaps fully
+- 41 public SEU Telegram groups — راوي/إبراهيم need to join manually (20-30/day limit); 18 groups need admin access
+- ~21K document_chunks with null course_code — attribution_worker draining continuously
 
 ---
 

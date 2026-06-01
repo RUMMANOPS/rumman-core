@@ -334,7 +334,7 @@ async def extract_pairs(
             ],
             max_tokens=1000,
         ),
-        timeout=30,
+        timeout=45,
     )
 
     raw     = resp.choices[0].message.content
@@ -378,10 +378,14 @@ async def embed_and_insert_pair(
             q=question[:60], a=answer[:60])
         return True
 
-    resp = await asyncio.wait_for(
-        ai.embeddings.create(model=EMBED_MODEL, input=content, dimensions=EMBED_DIMS),
-        timeout=30,
-    )
+    try:
+        resp = await asyncio.wait_for(
+            ai.embeddings.create(model=EMBED_MODEL, input=content, dimensions=EMBED_DIMS),
+            timeout=60,
+        )
+    except asyncio.TimeoutError:
+        log("EMBED_TIMEOUT", chat=chat_name, q=question[:60])
+        return False
     embedding = resp.data[0].embedding
 
     row = {

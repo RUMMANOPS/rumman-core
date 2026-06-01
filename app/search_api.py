@@ -606,6 +606,31 @@ async def _run_retrieval(
             all_raw.extend(rows)
             params_log.append(log_entry)
 
+        # Broad fallback: if a course-specific search returned almost nothing,
+        # run one additional broad search (no course filter). This catches the
+        # 84% of corpus chunks that lack a course_code assignment — once the
+        # attribution worker closes that gap this branch will almost never fire.
+        # Threshold raised to MIN_SIMILARITY to keep noise low.
+        _had_course_intent = bool(understanding.intent and understanding.intent.course_codes)
+        if _had_course_intent and len(all_raw) < 3:
+            _fallback_query = (
+                understanding.intent.normalized_text
+                if understanding.intent and understanding.intent.normalized_text
+                else understanding.query_normalized
+            )
+            try:
+                _fb_rows, _fb_log = await _embed_and_retrieve(
+                    SearchParams(query=_fallback_query, course_code=None, source_type=None, limit=limit)
+                )
+                if _fb_rows:
+                    all_raw.extend(_fb_rows)
+                    params_log.append({**_fb_log, "fallback": True})
+                    log.info("broad_fallback_fired | course=%s | found=%d",
+                             understanding.intent.course_codes[0] if understanding.intent else "?",
+                             len(_fb_rows))
+            except Exception as _fb_exc:
+                log.warning("broad_fallback_error | %s", _fb_exc)
+
         # Inject structured course facts for any detected course codes (institutional layer)
         if understanding.intent and understanding.intent.course_codes:
             curriculum = await _retrieve_curriculum_facts(http, understanding.intent.course_codes)

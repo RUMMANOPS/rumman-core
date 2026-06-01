@@ -816,7 +816,7 @@ async def _fetch_student_context(http: httpx.AsyncClient, user_id: str) -> dict:
                 "or":      "(expires_at.is.null,expires_at.gt.now())",
                 "limit":   "10",
             },
-            timeout=3,
+            timeout=4,
         )
         if r.status_code == 200:
             return {row["context_type"]: row for row in r.json()}
@@ -956,7 +956,7 @@ async def _fetch_message_signals(
             f"{SUPABASE_URL}/rest/v1/message_signals",
             headers=HEADERS,
             params=params,
-            timeout=2,
+            timeout=4,
         )
         if r.status_code == 200:
             return r.json()
@@ -981,7 +981,7 @@ async def _fetch_course_intelligence(
                 "select":      "coverage_level,total_chunks,exam_chunks,has_exam_archives,has_official_docs,has_summaries",
                 "limit":       "1",
             },
-            timeout=2,
+            timeout=4,
         )
         profile = r_profile.json()[0] if r_profile.status_code == 200 and r_profile.json() else None
     except Exception:
@@ -1002,7 +1002,7 @@ async def _fetch_course_intelligence(
             f"{SUPABASE_URL}/rest/v1/exam_intelligence",
             headers=HEADERS,
             params=params,
-            timeout=2,
+            timeout=4,
         )
         if r_sig.status_code == 200:
             signals = r_sig.json()
@@ -1520,8 +1520,9 @@ async def synthesize(req: SynthesizeRequest):
 
     # Fetch student context + course intelligence + message signals in parallel.
     # All reads are fire-and-forget-safe; silently skipped on timeout/error.
+    # 5s budget: Railway→Supabase latency averages 100-200ms; 2s was too tight.
     student_context_block: str | None = None
-    async with httpx.AsyncClient(timeout=3) as ctx_http:
+    async with httpx.AsyncClient(timeout=5) as ctx_http:
         ctx: dict = {}
         course_profile: dict | None = None
         exam_signals: list[dict] = []

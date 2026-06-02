@@ -12,3 +12,4 @@ auth_session.py
 .claude/
 data/seed_candidates_*.json
 data/group_links_*.txt
+data/RUMMAN_OPS_*.xlsx

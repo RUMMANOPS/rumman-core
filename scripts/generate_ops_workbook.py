@@ -66,6 +66,7 @@ TAB_COLORS = {
     "CORPUS":    "8E44AD",
     "STRATEGY":  "F39C12",
     "OPEN ITEMS":"E74C3C",
+    "RESUME":    "E67E22",
     "KEYS":      "922B21",
 }
 
@@ -1220,7 +1221,421 @@ def build_open_items(ws):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
 
-# ── Sheet 7: KEYS ─────────────────────────────────────────────────────────────
+# ── Sheet 7: RESUME ───────────────────────────────────────────────────────────
+
+def build_resume(ws):
+    ws.sheet_properties.tabColor = TAB_COLORS["RESUME"]
+    ws.freeze_panes = "A3"
+    COLS = 8
+    r = 1
+
+    title_cell(ws, r, 1, "  RESUME — Session Recovery & Continuity Guide", span=COLS, bg=C_NAVY, size=13)
+    r += 1
+    title_cell(ws, r, 1,
+               f"  Generated: {date.today().isoformat()}   ·   "
+               "Open this sheet when returning to RUMMAN after any pause.   "
+               "Sections 3 and 4 contain ready-to-paste prompts — copy the entire cell.",
+               span=COLS, bg=C_DARK, size=9, bold=False)
+    r += 2
+
+    # ─── 1. Project Current State ────────────────────────────────────────────
+    section_header(ws, r, 1, "  1 — PROJECT CURRENT STATE", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "Status")
+    col_header(ws, r, 2, "What is in this state")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+    r += 1
+    state_rows = [
+        ("PRODUCTION",
+         "listener · backfill · media · embed · search · bot  (6 Railway processes always-on)\n"
+         "147,793 messages ingested · 127,070 chunks embedded · 34 migrations applied\n"
+         "Search API live · Telegram bot live · Weekly report script ready"),
+        ("IN PROGRESS",
+         "Bulk-ingest 93 official SEU documents (~9 of 93 done) — run batch_ingest_seu.py\n"
+         "Populate inst_colleges.telegram_chat_ids mapping (empty — blocks college-level routing)\n"
+         "Reset ~11K failed telegram_media jobs after confirming TELEGRAM_MEDIA_IBRAHIM_SESSION in Railway"),
+        ("BLOCKED",
+         "Media job backlog (11K): blocked on confirming إبراهيم session variable is set in Railway\n"
+         "Student launch: blocked on corpus quality validation — eval_bot_quality.py not yet run\n"
+         "Full intelligence extraction: blocked on cost ceiling review + cursor tracking confirmation"),
+        ("EXPERIMENTAL",
+         "Attribution worker — GATED (ATTRIBUTION_WORKER_ENABLED=true to activate · 3K calls/day cap)\n"
+         "Intelligence worker — GATED (INTELLIGENCE_WORKER_ENABLED=true · 200K tokens/run hard cap)\n"
+         "Gap analyst clustering (34 gap_items from partial runs — needs regular monthly execution)"),
+        ("COMPLETED",
+         "Data spine (ADR-0002) · Claim model (ADR-0005) · Synthesis cache · Student context\n"
+         "Course intelligence profiles (339) · Exam signals (263) · Message signals (3,179)\n"
+         "QA mining · Attribution worker · Calendar injection · Weekly report · All 34 migrations"),
+    ]
+    state_colors = {
+        "PRODUCTION":   (C_GREEN,   C_WHITE),
+        "IN PROGRESS":  (C_YELLOW,  "000000"),
+        "BLOCKED":      (C_ACCENT,  C_WHITE),
+        "EXPERIMENTAL": (C_PURPLE,  C_WHITE),
+        "COMPLETED":    (C_MID,     C_WHITE),
+    }
+    for st, items in state_rows:
+        bg, fg = state_colors[st]
+        c1 = ws.cell(row=r, column=1, value=st)
+        c1.font = Font(bold=True, size=9, color=fg)
+        c1.fill = _fill(bg)
+        c1.alignment = _align("center", "top")
+        c1.border = _border(style="hair")
+        c2 = ws.cell(row=r, column=2, value=items)
+        c2.font = Font(size=9, color="000000")
+        c2.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c2.alignment = _align("left", "top", wrap=True)
+        c2.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 52
+        r += 1
+    r += 2
+
+    # ─── 2. Strategic Position ───────────────────────────────────────────────
+    section_header(ws, r, 1, "  2 — CURRENT STRATEGIC POSITION", span=COLS)
+    r += 1
+    strategic = [
+        ("Product thesis",
+         "Community knowledge, accumulated and organized, is the product. AI is the retrieval and synthesis lens. "
+         "148K messages from 102+ student groups is the non-replicable moat. A competitor can copy the AI model — "
+         "they cannot copy years of indexed community signals."),
+        ("Current focus",
+         "Phase 2 completion: fix media backlog, ingest remaining SEU docs, validate quality, define onboarding. "
+         "Goal: launch to a small paid cohort at SEU within this semester."),
+        ("Current priorities",
+         "1. Fix media jobs (11K backlog)   "
+         "2. Bulk-ingest 93 SEU docs   "
+         "3. Validate bot quality (eval_bot_quality.py)   "
+         "4. Enable intelligence worker   "
+         "5. Define student onboarding   "
+         "6. Soft-launch to 10 real students"),
+        ("Key assumptions (not yet validated)",
+         "Students will pay SAR 79/semester for accumulated intelligence access (hypothesis — not tested). "
+         "Telegram is the right channel for Phase 1-2. Finals prep is the highest-frequency use case. "
+         "Community signals (what professor emphasizes) > official study plans in practical student value."),
+        ("Open unresolved questions",
+         "What is the minimum corpus quality threshold before charging? "
+         "How to handle contradictory community vs. official information in UX? "
+         "Bot-first or web landing page for onboarding? "
+         "Which Saudi university to expand to after SEU — KFUPM, KSU, or private?"),
+        ("What has been decided — do not relitigate",
+         "gpt-4o-mini for synthesis (not GPT-4o — 10x cost unjustified). "
+         "text-embedding-3-large at 3072 dims LOCKED — changing requires full re-embedding of 127K chunks. "
+         "Direct PostgREST — no ORM (ADR-0009). "
+         "Backfill permanently separated from live ingestion (ADR-0002). "
+         "docs/ in repo is source of truth (ADR-0003)."),
+    ]
+    for label, text in strategic:
+        data_cell(ws, r, 1, label, bold=True, wrap=True, align="left")
+        c = ws.cell(row=r, column=2, value=text)
+        c.font = Font(size=9, color="000000")
+        c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c.alignment = _align("left", "top", wrap=True)
+        c.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 52
+        r += 1
+    r += 2
+
+    # ─── 3. Claude Code Prompt ───────────────────────────────────────────────
+    section_header(ws, r, 1,
+                   "  3 — READY-TO-PASTE: CLAUDE CODE PROMPT  "
+                   "(copy entire cell text → paste as first message in new Claude Code session)",
+                   span=COLS, bg="154360")
+    r += 1
+    claude_prompt = (
+        "RUMMAN Platform — Session Resume\n"
+        "\n"
+        "You are resuming work on RUMMAN, an Operational Intelligence OS for Saudi university students.\n"
+        "This is NOT a chatbot — the community corpus is the product and AI is the retrieval lens.\n"
+        "\n"
+        "=== WHAT RUMMAN IS ===\n"
+        "Platform that indexes Telegram messages (147,793 messages across 102+ student groups) + official university docs.\n"
+        "Students ask about exams, courses, deadlines — answers are grounded in the indexed corpus, never invented.\n"
+        "Currently serving SEU (Saudi Electronic University). Phase 2 in progress.\n"
+        "Tech: Python workers on Railway · Supabase (PostgreSQL + pgvector) · Telethon · OpenAI (gpt-4o-mini + text-embedding-3-large)\n"
+        "Repo: github.com/RUMMANOPS/rumman-core  |  Ops email: rumman.ops@gmail.com\n"
+        "\n"
+        "=== ARCHITECTURE ===\n"
+        "8 Railway processes: listener (rumman_engine.py) · backfill (telegram_backfill_worker.py) · media (telegram_download_worker.py)\n"
+        "  embed (embed_worker.py) · search (search_api.py) · bot (telegram_bot.py) · intelligence (GATED) · attribution (GATED)\n"
+        "3 Telegram accounts: غيث (listener +966582282200) · راوي (backfill +966590111167) · إبراهيم (media +966560064766)\n"
+        "  NEVER run two processes on the same session — causes AuthKeyDuplicatedError\n"
+        "34 migrations applied. All DB: direct PostgREST over httpx. No ORM, no Supabase client library.\n"
+        "\n"
+        "=== CORPUS STATE (June 2026) ===\n"
+        "messages: 147,793  |  document_chunks: 127,070  |  course_intelligence_profiles: 339\n"
+        "message_signals: 3,179  |  exam_intelligence: 263  |  intelligence_items: 184  |  gap_items: 34\n"
+        "\n"
+        "=== OPEN BLOCKERS ===\n"
+        "1. ~11K failed telegram_media jobs — confirm TELEGRAM_MEDIA_IBRAHIM_SESSION set in Railway\n"
+        "   then run: python3 scripts/reset_media_jobs.py\n"
+        "2. 93 official SEU docs need bulk ingest — run: python3 scripts/batch_ingest_seu.py\n"
+        "3. inst_colleges.telegram_chat_ids not populated (blocks college-level routing)\n"
+        "4. Bot quality not validated — run: python3 scripts/eval_bot_quality.py before student launch\n"
+        "\n"
+        "=== HARD RULES — DO NOT REVISIT ===\n"
+        "All DB: direct PostgREST — no ORM (ADR-0009)\n"
+        "Backfill and live ingestion PERMANENTLY separated (ADR-0002)\n"
+        "Default model: Sonnet — never switch to Opus without explicit per-task approval\n"
+        "Never commit .env, *.session, or API keys to git\n"
+        "Intelligence + attribution workers are GATED — never enable without reviewing token budget\n"
+        "docs/philosophy/ and docs/constraints/ are invariant — never modify autonomously\n"
+        "docs/ in repo is source of truth (ADR-0003)\n"
+        "\n"
+        "=== OPERATING MODE ===\n"
+        "Operate with full autonomy. Execute directly without asking for approval.\n"
+        "Escalate only for: irreversible Railway/Supabase destructive ops, billing changes, dropping tables with data.\n"
+        "Always respond in English (user writes in Arabic or English).\n"
+        "Workers: print structured single-line log events (JOB_CLAIMED | id=... | type=...) with flush=True.\n"
+        "\n"
+        "[Describe what you want to work on today]"
+    )
+    c = ws.cell(row=r, column=1, value=claude_prompt)
+    c.font = Font(name="Courier New", size=8, color="000000")
+    c.fill = _fill("EBF5FB")
+    c.alignment = _align("left", "top", wrap=True)
+    c.border = Border(
+        left=Side(style="medium", color="2980B9"),
+        right=Side(style="medium", color="2980B9"),
+        top=Side(style="medium", color="2980B9"),
+        bottom=Side(style="medium", color="2980B9"),
+    )
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=COLS)
+    ws.row_dimensions[r].height = 380
+    r += 2
+
+    # ─── 4. ChatGPT Prompt ───────────────────────────────────────────────────
+    section_header(ws, r, 1,
+                   "  4 — READY-TO-PASTE: CHATGPT PROMPT  "
+                   "(copy entire cell text → paste as first message in ChatGPT session)",
+                   span=COLS, bg="145A32")
+    r += 1
+    gpt_prompt = (
+        "RUMMAN — Current Doctrine & Strategic Position (June 2026)\n"
+        "\n"
+        "I'm building RUMMAN, an Operational Intelligence OS for Saudi university students.\n"
+        "Here is the complete current context for our discussion:\n"
+        "\n"
+        "=== PRODUCT THESIS ===\n"
+        "Community knowledge, accumulated and organized, is the product. AI is the retrieval and synthesis lens.\n"
+        "The corpus is the moat. A competitor can copy the AI model — they cannot copy 148K indexed messages\n"
+        "from 102+ student groups + 6 semesters of exam signals. The corpus is non-replicable.\n"
+        "\n"
+        "=== WHAT WE ARE NOT ===\n"
+        "Not a chatbot. Not a search engine. Not an LLM wrapper. Not a tutoring service.\n"
+        "Not a content creator. Not a competitor to professors. Not a homework solver.\n"
+        "\n"
+        "=== PRODUCT STAGES ===\n"
+        "Stage 1 (CURRENT): Finals Companion — 72-hour exam prep. Knows professor emphasis, past exam patterns, study plan.\n"
+        "Stage 2: Semester Companion — full semester intelligence: assignments, deadlines, announcements in one place.\n"
+        "Stage 3: Academic OS — cross-course intelligence, course selection, grade optimization.\n"
+        "Stage 4: Multi-university expansion (KFUPM, KSU, private). Per-tenant corpus, shared infrastructure.\n"
+        "\n"
+        "=== CURRENT POSITION ===\n"
+        "Phase 2 in progress. Data spine + search layer + bot live. Intelligence layer built but gated.\n"
+        "One university (SEU — Saudi Electronic University). One tenant. Not yet monetized.\n"
+        "Corpus: 147,793 messages · 127,070 chunks · 339 course profiles · 3,179 message signals.\n"
+        "\n"
+        "=== MONETIZATION PRINCIPLE ===\n"
+        "Never charge for AI answers. Charge for accumulated intelligence.\n"
+        "Free tier generates usage data (learning_events) that improves the paid product.\n"
+        "Students pay for confidence before exams — not for chat responses.\n"
+        "Working hypothesis: SAR 79/semester = one textbook. Low enough to be impulsive. High enough to be sustainable.\n"
+        "\n"
+        "=== WHAT HAS BEEN DECIDED — DO NOT RELITIGATE ===\n"
+        "Telegram as primary channel for Phase 1-2 (students are already there — no new behavior required)\n"
+        "gpt-4o-mini for synthesis — NOT GPT-4o (10x cost increase unjustified at current scale)\n"
+        "text-embedding-3-large at 3072 dims — locked (changing requires full re-embedding of 127K chunks)\n"
+        "Community intelligence > official docs in practical student value\n"
+        "SAR 79/semester as working price point (hypothesis — not yet validated with real payments)\n"
+        "\n"
+        "=== OPEN STRATEGIC QUESTIONS ===\n"
+        "1. What is the minimum corpus quality threshold before we start charging?\n"
+        "2. How do we handle contradictory community vs. official information in the UX?\n"
+        "3. Which Saudi university to target first after SEU? (KFUPM, KSU, or private?)\n"
+        "4. Bot-first or web landing page for student onboarding?\n"
+        "5. When is the right moment to move from Finals Companion → Semester Companion?\n"
+        "\n"
+        "=== MY QUESTION FOR YOU ===\n"
+        "[Paste your specific question here]"
+    )
+    c2 = ws.cell(row=r, column=1, value=gpt_prompt)
+    c2.font = Font(name="Courier New", size=8, color="000000")
+    c2.fill = _fill("EAFAF1")
+    c2.alignment = _align("left", "top", wrap=True)
+    c2.border = Border(
+        left=Side(style="medium", color="27AE60"),
+        right=Side(style="medium", color="27AE60"),
+        top=Side(style="medium", color="27AE60"),
+        bottom=Side(style="medium", color="27AE60"),
+    )
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=COLS)
+    ws.row_dimensions[r].height = 380
+    r += 2
+
+    # ─── 5. Immediate Next Actions ───────────────────────────────────────────
+    section_header(ws, r, 1, "  5 — IMMEDIATE NEXT ACTIONS  (ranked: impact × urgency × confidence)", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "#")
+    col_header(ws, r, 2, "Action")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
+    col_header(ws, r, 4, "Impact")
+    col_header(ws, r, 5, "Urgency")
+    col_header(ws, r, 6, "Confidence")
+    col_header(ws, r, 7, "Command / How to Execute")
+    ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=COLS)
+    r += 1
+    next_actions = [
+        ("1", "Confirm TELEGRAM_MEDIA_IBRAHIM_SESSION in Railway → reset 11K failed media jobs",
+         "HIGH", "HIGH", "HIGH",
+         "Railway → Settings → Variables → confirm var → python3 scripts/reset_media_jobs.py"),
+        ("2", "Bulk-ingest 93 official SEU documents into knowledge pipeline",
+         "HIGH", "HIGH", "HIGH",
+         "python3 scripts/batch_ingest_seu.py --dry-run  (then remove --dry-run to execute)"),
+        ("3", "Populate inst_colleges.telegram_chat_ids mapping",
+         "HIGH", "HIGH", "HIGH",
+         "SQL: UPDATE inst_colleges SET telegram_chat_ids=ARRAY['chat_id'] WHERE name='College Name'"),
+        ("4", "Run eval_bot_quality.py — establish quality baseline before any student launch",
+         "HIGH", "MEDIUM", "HIGH",
+         "python3 scripts/eval_bot_quality.py → document results → define 'good enough' threshold"),
+        ("5", "Enable intelligence worker after reviewing token cost",
+         "HIGH", "MEDIUM", "MEDIUM",
+         "Review ai_runs table cost → set INTELLIGENCE_WORKER_ENABLED=true in Railway → monitor spend"),
+        ("6", "Run extract_exam_signals.py + refresh_course_profiles.py",
+         "MEDIUM", "MEDIUM", "HIGH",
+         "python3 scripts/extract_exam_signals.py && python3 scripts/refresh_course_profiles.py"),
+        ("7", "Define student onboarding flow and improve bot welcome message",
+         "HIGH", "LOW", "MEDIUM",
+         "Decision: bot-first or web? Then implement /start welcome flow + /help improvements"),
+        ("8", "Validate with 5-10 real students before charging",
+         "HIGH", "LOW", "MEDIUM",
+         "Give free access to 10 students. Measure zero-result rate. Collect qualitative feedback."),
+    ]
+    for num, action, impact, urgency, conf, how in next_actions:
+        data_cell(ws, r, 1, num, bold=True, align="center")
+        c = ws.cell(row=r, column=2, value=action)
+        c.font = Font(size=9, bold=True, color="000000")
+        c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c.alignment = _align("left", "center", wrap=True)
+        c.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=3)
+        status_cell(ws, r, 4, impact)
+        status_cell(ws, r, 5, urgency)
+        status_cell(ws, r, 6, conf)
+        c2 = ws.cell(row=r, column=7, value=how)
+        c2.font = Font(name="Courier New", size=8, color="000000")
+        c2.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c2.alignment = _align("left", "center", wrap=True)
+        c2.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 32
+        r += 1
+    r += 2
+
+    # ─── 6. Do Not Forget ────────────────────────────────────────────────────
+    section_header(ws, r, 1, "  6 — DO NOT FORGET  (critical founder insights that must survive context loss)", span=COLS)
+    r += 1
+    insights = [
+        ("Community Intelligence is the foundation — not AI",
+         "The 148K indexed messages are the product. Lose this insight and you build a GPT wrapper that any student "
+         "can replicate in an afternoon. The corpus took months to accumulate across 102+ groups. It is the asset."),
+        ("AI is a capability, not the product",
+         "We use OpenAI to synthesize and retrieve. Any competitor can also use OpenAI. The differentiation is WHAT "
+         "the AI retrieves from — our community corpus. Never let the model be the story."),
+        ("Finals Companion first — Academic Copilot later",
+         "The highest-frequency, highest-stakes use case is exam prep. Do not skip to ambitious features. "
+         "Nail exam prep first. Trust compounds. A student who trusts RUMMAN before finals becomes a paying user."),
+        ("Trust before intelligence — grounded answers over impressive answers",
+         "A single hallucinated exam date or wrong professor claim destroys trust permanently. "
+         "The claim model (machine_asserted → confirmed) exists for this. Never bypass it. "
+         "An honest 'I don't have information about this' is better than a plausible hallucination."),
+        ("Avoid becoming a GPT wrapper",
+         "Every architectural decision that couples the product to OpenAI's capabilities is a liability. "
+         "The corpus is what survives model changes. If GPT-5 arrives, we still have the corpus. "
+         "The model is a replaceable component; the indexed community is not."),
+        ("The student is not searching for AI — they want confidence",
+         "Students want to know: what will be on the exam, what the professor emphasized, what past students wrote. "
+         "That is community intelligence, not AI chat. If the product feels like chatting with a bot, it is failing."),
+        ("Never charge per AI answer",
+         "Charging per query commoditizes the product and creates user anxiety. "
+         "Charge for access to accumulated intelligence. SAR 79/semester = access, not consumption. "
+         "Free tier generates the usage data (learning_events) that makes the paid tier better."),
+        ("Backfill and live ingestion are permanently separated",
+         "ADR-0002. Earlier versions merged them: startup delays, rate-limit hits, uncontrolled crawls. "
+         "rumman_engine.py must NEVER call iter_messages. ENABLE_BACKFILL guard must stay False. This is permanent."),
+        ("Three accounts, three identities — never share sessions",
+         "غيث (listener) · راوي (backfill) · إبراهيم (media). One process per account. "
+         "AuthKeyDuplicatedError from sharing sessions is not gracefully recoverable mid-run. "
+         "This architecture is load-bearing — do not simplify it away."),
+        ("docs/ is source of truth — code can drift, docs define intent",
+         "ADR-0003. When code and docs conflict, docs win. docs/philosophy/ and docs/constraints/ "
+         "are invariant — never modify autonomously. Architecture changes require ADR entries, not just code."),
+    ]
+    for i, (title, body) in enumerate(insights, 1):
+        c1 = ws.cell(row=r, column=1, value=f"  {i}.  {title}")
+        c1.font = Font(bold=True, size=9, color=C_WHITE)
+        c1.fill = _fill(C_MID)
+        c1.alignment = _align("left", "center")
+        c1.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=COLS)
+        r += 1
+        c2 = ws.cell(row=r, column=1, value=f"     {body}")
+        c2.font = Font(size=9, color="000000")
+        c2.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c2.alignment = _align("left", "center", wrap=True)
+        c2.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 42
+        r += 1
+    r += 2
+
+    # ─── 7. Recovery Checklist ───────────────────────────────────────────────
+    section_header(ws, r, 1, "  7 — RECOVERY CHECKLIST  (run through this on every return to RUMMAN)", span=COLS)
+    r += 1
+    checklist = [
+        ("□", "Pull latest from git",
+         "git pull  —  understand what changed since last session via git log --oneline -10"),
+        ("□", "Regenerate this workbook",
+         "python3 scripts/generate_ops_workbook.py  —  refreshes corpus numbers live from Supabase"),
+        ("□", "Check Railway process health",
+         "railway.app → project → verify all 6 processes are green: listener · backfill · media · embed · search · bot"),
+        ("□", "Verify Supabase counts",
+         "SELECT COUNT(*) FROM messages;  SELECT COUNT(*) FROM document_chunks;  — compare to numbers in CORPUS sheet"),
+        ("□", "Review OPEN ITEMS sheet",
+         "Are any risks resolved? Any decisions made? Any actions completed? Update the workbook accordingly."),
+        ("□", "Read Section 1 of this sheet",
+         "Review what is BLOCKED — blockers must be cleared before any forward progress has full effect"),
+        ("□", "Read Section 2 of this sheet",
+         "Reconnect with strategic position. What are the open questions? What has already been decided?"),
+        ("□", "Review docs/ for any updates",
+         "docs/06-roadmap/roadmap.md  ·  CLAUDE.md  ·  docs/02-adrs/  —  any new decisions recorded?"),
+        ("□", "Pick one next action from Section 5",
+         "Choose the highest-impact unblocked action. Start there. Do not plan — execute."),
+        ("□", "Paste Claude Code prompt from Section 3",
+         "Open new Claude Code session → paste Section 3 prompt as first message → describe today's work"),
+    ]
+    for chk, label, detail in checklist:
+        c1 = ws.cell(row=r, column=1, value=f"  {chk}  {label}")
+        c1.font = Font(bold=True, size=10, color="000000")
+        c1.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c1.alignment = _align("left", "center")
+        c1.border = _border(style="hair")
+        c2 = ws.cell(row=r, column=2, value=f"  {detail}")
+        c2.font = Font(size=9, color="444444", italic=True)
+        c2.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c2.alignment = _align("left", "center", wrap=True)
+        c2.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 22
+        r += 1
+
+    widths = [26, 30, 28, 12, 12, 14, 40, 10]
+    for i, w in enumerate(widths):
+        ws.column_dimensions[get_column_letter(i + 1)].width = w
+
+
+# ── Sheet 8: KEYS ─────────────────────────────────────────────────────────────
 
 def build_credentials(ws, env: dict):
     ws.sheet_properties.tabColor = TAB_COLORS["KEYS"]
@@ -1382,6 +1797,7 @@ def main():
         ("CORPUS",     lambda ws: build_corpus(ws)),
         ("STRATEGY",   lambda ws: build_strategy(ws)),
         ("OPEN ITEMS", lambda ws: build_open_items(ws)),
+        ("RESUME",     lambda ws: build_resume(ws)),
         ("KEYS",       lambda ws: build_credentials(ws, env_values)),
     ]
 

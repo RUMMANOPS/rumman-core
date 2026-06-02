@@ -1,15 +1,16 @@
 """
-intelligence_worker.py — Phase 2 intelligence extraction. DISABLED by default.
+intelligence_worker.py — Phase 2 intelligence extraction.
 
 Reads new messages (cursor-tracked), calls gpt-4o-mini to extract operational
 items (assignments, deadlines, decisions, etc.), writes to intelligence_items.
 
-Three preconditions must be true before enabling:
-  1. supabase/migrations/011_intelligence_layer.sql applied (creates worker_cursors + intelligence_items)
-  2. INTELLIGENCE_WORKER_ENABLED=true set in Railway environment
-  3. INTELLIGENCE_MAX_TOKENS_PER_RUN budget is appropriate for your message volume
+Deployed in Procfile. Gated by INTELLIGENCE_WORKER_ENABLED=true (default: off).
+Set the env var in Railway to activate.
 
-Do not add to Procfile until Phase 2 is formally started (see roadmap.md).
+Preconditions (already satisfied as of Phase 2):
+  1. supabase/migrations/011_intelligence_layer.sql applied
+  2. INTELLIGENCE_WORKER_ENABLED=true in Railway environment
+  3. Review INTELLIGENCE_MAX_TOKENS_PER_RUN budget for current message volume
 """
 
 import os

@@ -91,7 +91,7 @@ python3 scripts/extract_concepts.py --all
 
 ## Data Files
 
-### `data/seu_courses.json`
+### `data/inst_courses.json`
 
 Structured course data for SEU programs: course codes, English titles, descriptions, credit hours, levels, prerequisites. Currently covers `BSBA_MGT` and `BSCS`. Used by `seed_courses.py`.
 

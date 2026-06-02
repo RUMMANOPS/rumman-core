@@ -46,7 +46,7 @@ HEADERS = {
     "Prefer": "return=representation",
 }
 
-DATA_FILE = Path(__file__).parent / "data" / "seu_courses.json"
+DATA_FILE = Path(__file__).parent / "data" / "inst_courses.json"
 
 
 def log(event: str, **kwargs):

@@ -188,7 +188,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="RUMMAN Platform API", version="4.0", lifespan=lifespan)
+app = FastAPI(title="RUMMAN Platform API", version="4.1", lifespan=lifespan)
 ai  = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
 
@@ -1498,7 +1498,12 @@ async def synthesize(req: SynthesizeRequest):
         primary_course,
         exam_type,
     )
-    use_cache = grounded and not req.conversation_history  # never cache personalized turns
+    # Never cache: conversation turns (personalized), or queries with no course code.
+    # Broad queries (primary_course=None) may yield answers scoped to an enrolled
+    # user's courses — caching those would serve User A's personalized answer to User B.
+    # Course-specific queries (primary_course=IT362) are safe to cache because the
+    # course context dominates over any enrollment scoping.
+    use_cache = grounded and not req.conversation_history and primary_course is not None
 
     if use_cache:
         cached = _cache_get(c_key)

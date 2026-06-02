@@ -847,6 +847,14 @@ async def _handle(http: httpx.AsyncClient, message: dict) -> None:
         return
 
     if text.startswith("/"):
+        await _send(http, chat_id,
+            "أمر غير معروف.\n\n"
+            "الأوامر المتاحة:\n"
+            "• <code>/start</code> — رسالة الترحيب والأمثلة\n"
+            "• <code>/mycourses IT362 CS251</code> — تسجيل موادك\n"
+            "• <code>/forget</code> — مسح المواد المحفوظة\n\n"
+            "أو اسألني مباشرة عن أي مادة أو اختبار."
+        )
         return
 
     # ── Layer 1: Planning queries — inventory-first, not retrieval-first ──────

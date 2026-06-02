@@ -107,6 +107,7 @@ async def fetch_unattributed(http: httpx.AsyncClient) -> list[dict]:
             "attribution_status": "eq.original",
             "course_code":        "is.null",
             "embedding":          "not.is.null",
+            "tenant_id":          f"eq.{SEU_TENANT_ID}",
             "select":             "id,content,source_type,authority_tier",
             "order":              "id.asc",
             "limit":              str(BATCH_SIZE),

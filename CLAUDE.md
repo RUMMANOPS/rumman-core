@@ -134,7 +134,7 @@ python3 scripts/ingest_document.py <file_path> \
 
 Source types: `exam`, `study_plan`, `regulation`, `course_description`, `telegram_export`, `upload`
 
-**To seed structured course data** (names, descriptions, prerequisites) from `scripts/data/seu_courses.json`:
+**To seed structured course data** (names, descriptions, prerequisites) from `scripts/data/inst_courses.json`:
 ```bash
 python3 scripts/seed_courses.py              # seed all programs
 python3 scripts/seed_courses.py --dry-run    # validate only

@@ -77,10 +77,11 @@ SELECT source_type, source_authority, COUNT(*) FROM document_chunks
 WHERE tenant_id = '00000000-0000-0000-0000-000000000001'
 GROUP BY source_type, source_authority;
 
--- Search quality: zero-result rate
-SELECT detected_intent, COUNT(*) FILTER (WHERE result_count = 0) as no_results,
-       COUNT(*) as total, ROUND(AVG(response_time_ms)) as avg_ms
-FROM query_logs GROUP BY detected_intent;
+-- Search quality: zero-result rate (query_logs was dropped in migration 016; use learning_events)
+SELECT event_type, COUNT(*) FROM learning_events
+WHERE event_type IN ('query', 'zero_result', 'synthesis')
+AND tenant_id = '00000000-0000-0000-0000-000000000001'
+GROUP BY event_type;
 
 -- Backfill status
 SELECT chat_id, status, total_processed, retry_count FROM telegram_backfill_jobs
@@ -89,7 +90,7 @@ WHERE tenant_id = '00000000-0000-0000-0000-000000000001' ORDER BY status;
 
 ## Future Direction
 
-- n8n WF-003: automated bot error rate alerting
-- n8n WF-005: weekly knowledge gap report from query_logs
-- Dashboard over query_logs + feedback + processing_jobs
-- Cost observability: OpenAI spend per model per day
+- Automated bot error rate alerting on worker heartbeat gaps
+- Weekly knowledge gap report from `learning_events` (zero_result rate by course_code)
+- Dashboard over `learning_events` + `ai_runs` + `processing_jobs`
+- Cost observability: `SELECT SUM(cost_usd) FROM ai_runs WHERE DATE(created_at) = CURRENT_DATE`

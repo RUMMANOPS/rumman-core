@@ -4,23 +4,31 @@ RUMMAN's operational data spine. PostgreSQL + pgvector. Project ID: `yriavgczteu
 
 All migrations live in `rumman-core/supabase/migrations/`. Apply via Supabase SQL Editor.
 
-*Last updated: 2026-06-02 — reflects migrations 001–033 (Phase 2 complete). This document previously covered only 001–009; sections below marked ⚠️ STALE use old table names or describe superseded state.*
+*Last updated: 2026-06-02 — reflects all 34 migrations 001–034 (Phase 2 complete).*
 
 ---
 
 ## Schema Overview
 
 ```
-Ingestion Layer          Intelligence Layer       Institutional Layer
+Ingestion Layer          Knowledge Layer          Institutional Layer
 ─────────────────        ─────────────────        ─────────────────
-messages                 document_chunks          seu_colleges
-telegram_sync_state      source_documents         seu_specializations
-telegram_backfill_jobs   media_files              seu_courses
-processing_jobs          query_logs
-                         feedback                 Platform Layer
-                                                  tenants
-                                                  users
-                                                  sessions
+messages                 document_chunks          inst_colleges
+telegram_sync_state      source_documents         inst_specializations
+telegram_backfill_jobs   media_files              inst_courses
+processing_jobs          intelligence_items
+                         message_signals          Platform Layer
+                         course_intelligence_     tenants
+                           profiles               rumman_users
+                         exam_intelligence        rumman_sessions
+
+Observability Layer      Student Layer
+─────────────────        ─────────────────
+learning_events          student_context
+ai_runs                  academic_calendar
+worker_heartbeats
+analysis_runs
+gap_items
 ```
 
 ---
@@ -152,15 +160,13 @@ The retrieval corpus. pgvector embeddings of all extracted text.
 | `source_document_id` | UUID | FK → source_documents (NULL for Telegram-origin chunks) |
 | `chunk_text` | TEXT | Chunk content |
 | `chunk_index` | INT | Position within document |
-| `embedding` | VECTOR(3072) | text-embedding-3-large output |
+| `embedding` | VECTOR(1536) | text-embedding-3-large output (1536 dimensions, set in migration 003) |
 | `course_code` | TEXT | Detected/assigned course code |
 | `source_type` | TEXT | Inherited from source_document |
 | `language` | TEXT | 'ar', 'en' |
 
 **pgvector index:** `ivfflat` on `embedding` column.
-**RPC function:** `match_documents(query_embedding, match_threshold, match_count, tenant_id)` — defined in migration 005.
-
-⚠️ **Known gap:** No `source_authority` field to distinguish official docs from community uploads. Migration 010 will add this.
+**RPC function:** `match_documents(query_embedding, match_threshold, match_count, filter_tenant)` — originally defined in migration 005, updated with authority tier filtering in migration 022, fixed with metadata JSONB return in migration 034. Current signature returns `metadata` JSONB column alongside chunk data.
 
 **Written by:** `embed_worker.py`, `scripts/seed_courses.py` (course descriptions)
 **Read by:** `search_api.py` via `match_documents` RPC
@@ -185,36 +191,8 @@ Audio transcription results and media metadata.
 
 ---
 
-### `query_logs`
-All search and synthesis queries. Used for observability and future analytics.
-
-**Key columns:**
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | |
-| `tenant_id` | UUID | |
-| `session_id` | UUID | FK → sessions |
-| `query_text` | TEXT | Raw student query |
-| `normalized_query` | TEXT | After normalization pipeline |
-| `detected_intent` | TEXT | Output of gpt-4o-mini classifier |
-| `detected_course_code` | TEXT | |
-| `result_count` | INT | Chunks returned |
-| `synthesis_tokens` | INT | Tokens used for synthesis |
-| `response_time_ms` | INT | End-to-end latency |
-| `model_used` | TEXT | e.g. 'gpt-4o-mini' |
-
----
-
-### `feedback`
-Student feedback on bot responses.
-
-**Key columns:**
-| Column | Type | Notes |
-|---|---|---|
-| `id` | UUID PK | |
-| `query_log_id` | UUID | FK → query_logs |
-| `rating` | INT | 1-5 or thumbs up/down |
-| `comment` | TEXT | Optional free text |
+### ~~`query_logs`~~ — DROPPED in migration 016
+Originally tracked search and synthesis queries. Replaced by `learning_events` (see Observability Layer) which provides the same analytics with a more general event model. Any query referencing `query_logs` will fail — use `learning_events` with `event_type = 'query'` or `event_type = 'synthesis'`.
 
 ---
 
@@ -437,6 +415,28 @@ Normalized knowledge gap records from `gap_analyst.py` runs.
 | 007 | `007_platform_foundations.sql` | tenants, users, sessions, events |
 | 008 | `008_curriculum_foundations.sql` | seu_colleges, seu_specializations, seu_courses |
 | 009 | `009_curriculum_graduate_and_remapping.sql` | 8 graduate specializations + course re-mapping |
-| 010+ | *(033 total migrations)* | authority_tier on chunks; inst_* renames (014); intelligence_items; message_signals; course_intelligence_profiles; exam_intelligence; academic_calendar; student_context; learning_events; worker_heartbeats; analysis_runs; gap_items; ai_runs; rumman_users/sessions renames; attribution columns; active_extracted_items view; active_document_chunks view; worker_cursors; cost observability |
-
-**Note:** This document was last fully detailed for migrations 001–009. Migrations 010–033 are documented in `RUMMAN_MASTER_DOSSIER.md` Section 7.
+| 010 | `010_source_authority.sql` | `source_authority` tier column on document_chunks (official/verified/community) |
+| 011 | `011_intelligence_layer.sql` | `intelligence_items` table — structured operational items from messages |
+| 012 | `012_messages_tenant_id.sql` | `tenant_id` backfill on `messages` |
+| 013 | `013_embedding_model.sql` | `embedding_model` column on document_chunks |
+| 014 | `014_rename_seu_to_inst.sql` | Rename `seu_*` tables to `inst_*` for multi-tenancy |
+| 015 | `015_claim_model_and_authority.sql` | Claim model columns (`machine_asserted`, `confidence_tier`) |
+| 016 | `016_temporal_and_ops.sql` | `learning_events` table; `query_logs` and `feedback` DROPPED |
+| 017 | `017_academic_calendar_1447h.sql` | `academic_calendar` table, SEU 1447H dates seeded |
+| 018 | `018_drop_legacy_courses_table.sql` | Drop legacy courses table superseded by `inst_courses` |
+| 019 | `019_fix_intelligence_items.sql` | Fix dedup constraint on `intelligence_items` |
+| 020 | `020_drop_seu_compat_views.sql` | Drop backward-compat `seu_*` views |
+| 021 | `021_ai_runs_defaults.sql` | Defaults and constraints on `ai_runs` |
+| 022 | `022_match_documents_authority_tier.sql` | Update `match_documents()` with authority tier filtering |
+| 023 | `023_worker_heartbeats.sql` | `worker_heartbeats` table for liveness monitoring |
+| 024 | `024_course_names_bulk.sql` | Bulk-seed Arabic course names into `inst_courses` |
+| 025 | `025_claim_model_temporal_and_contradiction.sql` | `active_extracted_items` and `active_document_chunks` views; supersession columns |
+| 026 | `026_analysis_runs.sql` | `analysis_runs` + `gap_items` tables for gap analyst |
+| 027 | `027_document_chunks_metadata.sql` | `metadata` JSONB column on document_chunks |
+| 028 | `028_self_healing_ingestion.sql` | Self-healing backfill and retry improvements |
+| 029 | `029_fix_intelligence_items_dedup.sql` | Fix dedup logic on intelligence_items |
+| 030 | `030_student_context.sql` | `student_context` table — persistent cross-session student memory |
+| 031 | `031_course_intelligence_profiles.sql` | `course_intelligence_profiles` + `exam_intelligence` tables |
+| 032 | `032_message_signals.sql` | `message_signals` table — typed signals from Telegram messages |
+| 033 | `033_backfill_tenant_id.sql` | Backfill missing `tenant_id` values across tables |
+| 034 | `034_match_documents_fix.sql` | Fix `match_documents()` — add `filter_tenant` UUID parameter, return `metadata` JSONB |

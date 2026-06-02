@@ -68,6 +68,7 @@ These documents are derived from the running system. AI systems may update them 
 | `06-roadmap/roadmap.md` | Maintained | Phase structure and current status |
 | `07-knowledge-layer/knowledge-layer-overview.md` | Maintained | Layer 2 design, per-modality pipelines, current operational status |
 | `08-product-strategy/product-doctrine.md` | Maintained | Product identity, stage model, trust theory, monetization hypotheses, dependency analysis |
+| `founder-doctrine.md` | Maintained | Founder-level doctrine — confirmed decisions, working hypotheses, open questions across 10 domains |
 | `RUMMAN_MASTER_DOSSIER.md` (repo root) | Generated | Complete institutional memory — produced at Phase 2 completion (2026-06-01) |
 
 ---

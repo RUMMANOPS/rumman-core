@@ -31,7 +31,7 @@ After running, the `pdf_worker` and `embed_worker` processes must run to complet
 
 ### `seed_courses.py` — Seed structured course data from `data/seu_courses.json`
 
-Pushes course records (codes, English names, descriptions, credit hours, levels, prerequisites) into the `seu_courses` table. The JSON file currently covers 2 programs: `BSBA_MGT` (37 courses) and `BSCS` (45 courses).
+Pushes course records (codes, English names, descriptions, credit hours, levels, prerequisites) into the `inst_courses` table. The JSON file currently covers 2 programs: `BSBA_MGT` (37 courses) and `BSCS` (45 courses).
 
 ```bash
 python3 scripts/seed_courses.py              # seed all programs

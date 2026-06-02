@@ -27,6 +27,23 @@ from openpyxl.styles import (
 )
 from openpyxl.utils import get_column_letter
 
+
+def _load_env(repo_root: Path) -> dict:
+    """Parse .env from repo root — values populate the KEYS sheet at generation time."""
+    env_path = repo_root / ".env"
+    result = {}
+    if not env_path.exists():
+        return result
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" in line:
+            k, _, v = line.partition("=")
+            result[k.strip()] = v.strip()
+    return result
+
+
 # ── Colour palette ─────────────────────────────────────────────────────────────
 
 C_NAVY    = "1A1A2E"   # title backgrounds
@@ -49,7 +66,10 @@ TAB_COLORS = {
     "CORPUS":    "8E44AD",
     "STRATEGY":  "F39C12",
     "OPEN ITEMS":"E74C3C",
+    "KEYS":      "922B21",
 }
+
+C_CRED_DARK = "7B241C"   # dark red for credential subtitle bar
 
 
 # ── Style factories ────────────────────────────────────────────────────────────
@@ -1198,6 +1218,139 @@ def build_open_items(ws):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
 
+# ── Sheet 7: KEYS ─────────────────────────────────────────────────────────────
+
+def build_credentials(ws, env: dict):
+    ws.sheet_properties.tabColor = TAB_COLORS["KEYS"]
+    ws.freeze_panes = "A5"
+    COLS = 7
+    r = 1
+
+    title_cell(ws, r, 1,
+               "  ⚠  KEYS — API Keys, Tokens & Session Strings   "
+               "  SENSITIVE: do not share, screenshot, or email this file.",
+               span=COLS, bg="922B21", size=12)
+    r += 1
+    title_cell(ws, r, 1,
+               f"  Generated: {date.today().isoformat()}   ·   "
+               "Values read from local .env at generation time.   "
+               "Variables not in .env are Railway-only — retrieve from Railway dashboard.",
+               span=COLS, bg=C_CRED_DARK, size=9, bold=False)
+    r += 2
+
+    # ── Active credentials table
+    section_header(ws, r, 1, "  ALL ACTIVE CREDENTIALS", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "Variable Name")
+    col_header(ws, r, 2, "Category")
+    col_header(ws, r, 3, "Used By")
+    col_header(ws, r, 4, "Source")
+    col_header(ws, r, 5, "Current Value")
+    ws.merge_cells(start_row=r, start_column=5, end_row=r, end_column=COLS)
+    r += 1
+
+    _NA = "NOT IN .env — retrieve from Railway dashboard (Settings → Variables)"
+
+    creds = [
+        # var_name | category | used_by | source_label | env_key (or literal)
+        ("TELEGRAM_API_ID",                  "Telegram Auth",    "listener, backfill, media",           ".env",    "TELEGRAM_API_ID"),
+        ("TELEGRAM_API_HASH",                "Telegram Auth",    "listener, backfill, media",           ".env",    "TELEGRAM_API_HASH"),
+        ("TELEGRAM_LISTENER_GHAYTH_SESSION", "Session — غيث",   "listener (rumman_engine.py)",          ".env",    "TELEGRAM_LISTENER_GHAYTH_SESSION"),
+        ("TELEGRAM_BACKFILL_RAWI_SESSION",   "Session — راوي",  "backfill (telegram_backfill_worker)",  ".env",    "TELEGRAM_BACKFILL_RAWI_SESSION"),
+        ("TELEGRAM_MEDIA_IBRAHIM_SESSION",   "Session — إبراهيم","media (telegram_download_worker)",    ".env",    "TELEGRAM_MEDIA_IBRAHIM_SESSION"),
+        ("TELEGRAM_BOT_TOKEN",               "Bot Token",        "bot (telegram_bot.py)",               "Railway", "TELEGRAM_BOT_TOKEN"),
+        ("SUPABASE_URL",                     "Database",         "all workers",                         ".env",    "SUPABASE_URL"),
+        ("SUPABASE_KEY",                     "Database",         "all workers",                         ".env",    "SUPABASE_KEY"),
+        ("OPENAI_API_KEY",                   "AI / ML",          "embed, search, intelligence, attribution", ".env","OPENAI_API_KEY"),
+        ("RAILWAY_API_TOKEN",                "Infrastructure",   "railway CLI (local deploys)",          "Railway", "RAILWAY_API_TOKEN"),
+        ("RUMMAN_USER_SALT",                 "Privacy",          "bot, search (user ID hashing)",        "Railway", "RUMMAN_USER_SALT"),
+        ("SEU_TENANT_ID",                    "Config",           "all workers",                          "Railway", "SEU_TENANT_ID"),
+        ("SEARCH_API_URL",                   "Internal URL",     "bot → search (internal Railway URL)",  "Railway", "SEARCH_API_URL"),
+        ("RUMMAN_OPS_CHAT_ID",               "Config",           "weekly_report.py",                     "Railway", "RUMMAN_OPS_CHAT_ID"),
+        ("INTELLIGENCE_WORKER_ENABLED",      "Feature Gate",     "intelligence_worker.py",               "Railway", "INTELLIGENCE_WORKER_ENABLED"),
+        ("ATTRIBUTION_WORKER_ENABLED",       "Feature Gate",     "attribution_worker.py",                "Railway", "ATTRIBUTION_WORKER_ENABLED"),
+        ("LOG_LEVEL",                        "Config",           "all workers",                          ".env",    "LOG_LEVEL"),
+    ]
+
+    for var_name, category, used_by, source_label, env_key in creds:
+        value = env.get(env_key, _NA)
+        is_set = value != _NA
+        is_session = "SESSION" in var_name
+
+        data_cell(ws, r, 1, var_name, bold=True, align="left")
+        data_cell(ws, r, 2, category, bold=False, align="left")
+        data_cell(ws, r, 3, used_by, bold=False, align="left", wrap=True)
+        # Source badge
+        src_c = ws.cell(row=r, column=4, value=source_label)
+        src_c.font = Font(bold=True, size=9,
+                          color=C_WHITE if source_label == ".env" else "000000")
+        src_c.fill = _fill(C_MID if source_label == ".env" else C_YELLOW)
+        src_c.alignment = _align("center", "center")
+        src_c.border = _border(style="hair")
+        # Value cell
+        c = ws.cell(row=r, column=5, value=value)
+        c.font = Font(name="Courier New", size=7 if is_session else 9,
+                      color="000000" if is_set else C_RED,
+                      bold=is_set and not is_session)
+        c.fill = _fill("FEF9E7") if is_set else _fill("FDECEA")
+        c.alignment = _align("left", "top", wrap=True)
+        c.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=5, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 72 if is_session else 18
+        r += 1
+
+    r += 2
+
+    # ── Rotation guide
+    section_header(ws, r, 1, "  HOW TO ROTATE EACH CREDENTIAL TYPE", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "Type")
+    col_header(ws, r, 2, "Steps")
+    ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+    r += 1
+    rotation_guide = [
+        ("Telegram Sessions\n(GHAYTH / RAWI / IBRAHIM)",
+         "1. Run locally: python3 auth_session.py\n"
+         "2. Enter phone (+966XXXXXXXXX) → receive OTP → enter OTP\n"
+         "3. Copy the printed StringSession string (one line, starts with 1BJWap...)\n"
+         "4. Go to Railway → project → service → Variables\n"
+         "5. Update TELEGRAM_LISTENER_GHAYTH_SESSION (or RAWI / IBRAHIM) with new value\n"
+         "6. Redeploy the affected process (listener / backfill / media)\n"
+         "Warning: never run two processes with the same session simultaneously → AuthKeyDuplicatedError"),
+        ("OpenAI API Key",
+         "1. platform.openai.com → API keys → Create new secret key\n"
+         "2. Copy key immediately (shown once)\n"
+         "3. Update OPENAI_API_KEY in local .env AND Railway Variables\n"
+         "4. Revoke the old key in OpenAI dashboard\n"
+         "5. Monitor ai_runs table for any failures after rotation"),
+        ("Supabase Service-Role Key",
+         "1. supabase.com → project → Settings → API → service_role key → Reveal\n"
+         "2. Update SUPABASE_KEY in local .env AND Railway Variables\n"
+         "3. Supabase does not auto-rotate — manual rotation only\n"
+         "Note: the SUPABASE_URL never changes for a given project (it's the project ref)"),
+        ("Telegram Bot Token",
+         "1. Telegram app → @BotFather → /mybots → select bot → API Token → Revoke token\n"
+         "2. BotFather generates a new token immediately\n"
+         "3. Update TELEGRAM_BOT_TOKEN in Railway Variables\n"
+         "4. Redeploy the bot process\n"
+         "Note: revoking immediately invalidates the old token — brief downtime expected"),
+    ]
+    for rot_type, rot_steps in rotation_guide:
+        data_cell(ws, r, 1, rot_type, bold=True, wrap=True, align="left")
+        c = ws.cell(row=r, column=2, value=rot_steps)
+        c.font = Font(size=9, color="000000")
+        c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c.alignment = _align("left", "top", wrap=True)
+        c.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=2, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 72
+        r += 1
+
+    widths = [40, 20, 28, 10, 70, 10, 10]
+    for i, w in enumerate(widths):
+        ws.column_dimensions[get_column_letter(i + 1)].width = w
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
@@ -1213,16 +1366,21 @@ def main():
         data_dir.mkdir(parents=True, exist_ok=True)
         out_path = data_dir / f"RUMMAN_OPS_{date.today().isoformat()}.xlsx"
 
+    repo_root = Path(__file__).parent.parent
+    env_values = _load_env(repo_root)
+    env_loaded = len(env_values) > 0
+
     wb = Workbook()
     wb.remove(wb.active)  # remove default sheet
 
     sheets = [
-        ("COMPASS",    build_compass),
-        ("SYSTEMS",    build_systems),
-        ("PROCESSES",  build_processes),
-        ("CORPUS",     build_corpus),
-        ("STRATEGY",   build_strategy),
-        ("OPEN ITEMS", build_open_items),
+        ("COMPASS",    lambda ws: build_compass(ws)),
+        ("SYSTEMS",    lambda ws: build_systems(ws)),
+        ("PROCESSES",  lambda ws: build_processes(ws)),
+        ("CORPUS",     lambda ws: build_corpus(ws)),
+        ("STRATEGY",   lambda ws: build_strategy(ws)),
+        ("OPEN ITEMS", lambda ws: build_open_items(ws)),
+        ("KEYS",       lambda ws: build_credentials(ws, env_values)),
     ]
 
     for name, builder in sheets:
@@ -1235,14 +1393,10 @@ def main():
     wb.save(out_path)
     print(f"\nWorkbook saved → {out_path}")
     print(f"Sheets: {', '.join(s[0] for s in sheets)}")
-    print(f"\nDesign rationale:")
-    print("  6 sheets, not 12. Each sheet answers one kind of question.")
-    print("  COMPASS  — What is this? (30-second orientation)")
-    print("  SYSTEMS  — What are we paying for / who has access?")
-    print("  PROCESSES— How does it run? (technical ops manual)")
-    print("  CORPUS   — What data exists? (the actual product)")
-    print("  STRATEGY — Where is it going? (product + commercial)")
-    print("  OPEN ITEMS—What needs attention now? (action surface)")
+    if env_loaded:
+        print(f"\n  KEYS sheet: populated from .env ({len(env_values)} variables found)")
+    else:
+        print(f"\n  KEYS sheet: .env not found — all values show as NOT SET")
 
 
 if __name__ == "__main__":

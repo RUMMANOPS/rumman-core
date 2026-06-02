@@ -336,6 +336,42 @@ def build_compass(ws):
         ws.row_dimensions[r].height = 32
         r += 1
 
+    r += 2
+
+    # ── Quick Commands
+    section_header(ws, r, 1, "  QUICK COMMANDS  (most-needed CLI ops — run from repo root with .env present)", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "Command")
+    ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+    col_header(ws, r, 4, "What It Does")
+    ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=COLS)
+    r += 1
+    commands = [
+        ("python3 scripts/reset_media_jobs.py",                 "Re-queue ~11K failed telegram_media jobs (after confirming TELEGRAM_MEDIA_IBRAHIM_SESSION set in Railway)"),
+        ("python3 scripts/batch_ingest_seu.py --dry-run",       "Preview bulk-ingest of 93 official SEU docs. Remove --dry-run to execute."),
+        ("python3 scripts/weekly_report.py",                    "Weekly ops health report → posts to Telegram ops channel (requires RUMMAN_OPS_CHAT_ID)"),
+        ("python3 scripts/gap_analyst.py",                      "Cluster zero-result learning_events → gap_items table (run monthly)"),
+        ("python3 scripts/refresh_course_profiles.py",          "Recompute course_intelligence_profiles + exam_intelligence coverage metrics"),
+        ("python3 scripts/message_signal_worker.py",            "Extract typed signals from 72K message corpus → message_signals (one-time, ~$0.18)"),
+        ("python3 scripts/eval_bot_quality.py",                 "10 test queries — synthesis quality baseline (run before charging students)"),
+        ("python3 app/query_handler.py IT362 'exam topics'",    "Test query synthesis locally for a specific course (dev/debug only)"),
+    ]
+    for cmd in commands:
+        c1 = ws.cell(row=r, column=1, value=f"  {cmd[0]}")
+        c1.font = Font(name="Courier New", size=8, bold=True, color="000000")
+        c1.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c1.alignment = _align("left", "center", wrap=False)
+        c1.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=3)
+        c2 = ws.cell(row=r, column=4, value=f"  {cmd[1]}")
+        c2.font = Font(size=9, color="000000")
+        c2.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c2.alignment = _align("left", "center", wrap=True)
+        c2.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=COLS)
+        ws.row_dimensions[r].height = 20
+        r += 1
+
     # ── Column widths
     widths = [28, 36, 42, 10, 12, 32, 50, 10]
     for i, w in enumerate(widths):
@@ -559,7 +595,55 @@ def build_processes(ws):
                           wrap=(j in (1, 2)), align="left")
         r += 1
 
-    widths = [38, 38, 24, 14, 12, 44, 28, 20, 14]
+    r += 2
+
+    # ── Scripts Inventory
+    section_header(ws, r, 1, "  SCRIPTS INVENTORY  (run locally — require .env — not deployed on Railway)", span=COLS)
+    r += 1
+    col_header(ws, r, 1, "Script File")
+    col_header(ws, r, 2, "Category")
+    col_header(ws, r, 3, "Purpose")
+    ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+    col_header(ws, r, 7, "Run When")
+    col_header(ws, r, 8, "Cost?")
+    col_header(ws, r, 9, "Est. Cost")
+    r += 1
+    scripts_inv = [
+        ("ingest_document.py",          "Ingestion",   "Ingest one file: upload → source_documents → pdf_extract job → embed_chunk job",                            "On demand",          "YES",  "~$0.01"),
+        ("batch_ingest_seu.py",         "Ingestion",   "Bulk-ingest all 93 SEU official docs in priority order (Regulations → StudyPlans → CourseContent)",          "Once / semester",    "YES",  "~$0.50"),
+        ("seed_courses.py",             "Ingestion",   "Push course catalog (codes, names, prereqs) from inst_courses.json into inst_courses table",                  "Setup / update",     "OPT",  "Free (or ~$0.05 with --embed)"),
+        ("create_backfill_jobs.py",     "Backfill",    "Create telegram_backfill_jobs rows for specified chat IDs — backfill worker picks them up",                   "Adding new groups",  "NO",   "Free"),
+        ("reset_media_jobs.py",         "Maintenance", "Re-queue failed telegram_media jobs back to pending (run after session env var fix)",                         "After incident",     "NO",   "Free"),
+        ("backfill_tenant_id_033.py",   "Maintenance", "Backfill missing tenant_id on all rows (companion to migration 033)",                                         "One-time",           "NO",   "Free"),
+        ("backfill_course_codes.py",    "Maintenance", "Regex + LLM inference to fill null course_code on source_documents and their chunks",                        "On demand",          "YES",  "~$0.10"),
+        ("gap_analyst.py",              "Analysis",    "Cluster zero-result learning_events into gap_items (signals corpus coverage holes)",                          "Monthly",            "YES",  "~$0.05"),
+        ("refresh_course_profiles.py",  "Analysis",    "Recompute course_intelligence_profiles and exam_intelligence metrics per course",                             "After ingestion",    "NO",   "Free"),
+        ("extract_exam_signals.py",     "Analysis",    "Extract recurring exam topics from message corpus → exam_intelligence table",                                 "Monthly",            "YES",  "~$0.10"),
+        ("message_signal_worker.py",    "Analysis",    "Extract typed signals (exam_emphasis, difficulty, professor_note, resource_rec) from 72K messages",          "Once + after ingest","YES",  "~$0.18"),
+        ("weekly_report.py",            "Reporting",   "Weekly ops + product health report → posts to Telegram ops channel (RUMMAN_OPS_CHAT_ID required)",           "Weekly",             "YES",  "~$0.05"),
+        ("eval_bot_quality.py",         "QA",          "10 test queries; before/after synthesis quality comparison. Baseline before launch.",                         "Pre-launch / change","YES",  "~$0.05"),
+        ("generate_seed_lexicon.py",    "Lexicon",     "Analyze document_chunks for non-standard terms → seed_candidates_<timestamp>.json (gitignored)",             "On demand",          "NO",   "Free"),
+        ("review_candidates.py",        "Lexicon",     "Interactive review of lexicon candidates before adding to data/normalization_dict.json",                     "After generate",     "NO",   "Free"),
+        ("export_group_links.py",       "Utility",     "Export Telegram group invite links for all tracked chats via إبراهيم session",                               "On demand",          "NO",   "Free"),
+        ("extract_concepts.py",         "Utility",     "Extract academic concepts from document_chunks for future knowledge graph seeding",                           "On demand",          "YES",  "~$0.05"),
+        ("generate_ops_workbook.py",    "Meta",        "Generate this workbook — RUMMAN_OPS_YYYY-MM-DD.xlsx (gitignored output)",                                    "Any time",           "NO",   "Free"),
+    ]
+    for s in scripts_inv:
+        data_cell(ws, r, 1, s[0], bold=True, align="left")
+        data_cell(ws, r, 2, s[1], bold=False, align="left")
+        c = ws.cell(row=r, column=3, value=s[2])
+        c.font = Font(size=9, color="000000")
+        c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+        c.alignment = _align("left", "center", wrap=True)
+        c.border = _border(style="hair")
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+        data_cell(ws, r, 7, s[3], bold=False, align="center")
+        status_cell(ws, r, 8, s[4])
+        data_cell(ws, r, 9, s[5], bold=False, align="center")
+        ws.row_dimensions[r].height = 26
+        r += 1
+
+    widths = [38, 16, 24, 14, 12, 44, 26, 10, 20]
     for i, w in enumerate(widths):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
@@ -615,6 +699,49 @@ def build_corpus(ws):
         r += 1
     r += 2
 
+    # ── University Knowledge Repository
+    section_header(ws, r, 1, "  UNIVERSITY KNOWLEDGE REPOSITORY  (official docs — outside this repo)", span=COLS)
+    r += 1
+    title_cell(ws, r, 1,
+               "  Location: .../0-RUMMAN/0-Universities/1- Saudi Electronic University/   "
+               "  Ingest all: python3 scripts/batch_ingest_seu.py",
+               span=COLS, bg=C_DARK, size=9, bold=False)
+    r += 1
+    h_repo = ["Directory", "Content Type", "File Count", "Ingested", "Status", "How to Ingest"]
+    for i, hh in enumerate(h_repo):
+        col_header(ws, r, i + 1, hh)
+    ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=COLS)
+    r += 1
+    repo_dirs = [
+        ("2. Regulations/",        "Exam rules, student guides, procedures (PDF)",                      "~20", "~3",   "PENDING", "batch_ingest_seu.py  or  ingest_document.py <file> --source-type regulation"),
+        ("1. StudyPlans/",         "Official program study plans (PDF/DOCX) by college → dept → program", "~30","~3", "PENDING", "batch_ingest_seu.py  or  ingest_document.py <file> --source-type study_plan"),
+        ("4. CourseContent/",      "Individual course syllabi (PDF) — ENGT program (34 files)",          "~34", "~1",  "PENDING", "batch_ingest_seu.py  or  ingest_document.py <file> --source-type course_description"),
+        ("0. OpenData/",           "Enrollment stats, faculty data (PDF)",                               "~5",  "~1",  "PENDING", "ingest_document.py <file> --source-type regulation"),
+        ("5. Diplomas/",           "Applied College diploma program plans",                               "~10", "~0",  "PENDING", "batch_ingest_seu.py  (lowest priority)"),
+        ("3. AcademicCalendar/",   "Semester dates and windows",                                          "~5",  "~1",  "DONE",    "Seeded via migration 017 → academic_calendar table. No re-ingest needed."),
+        ("_metadata/",             "knowledge_manifest.json, program_index.json",                         "2",   "—",   "N/A",     "Index files only — not ingested into document_chunks"),
+        ("TOTAL",                  "93 official documents",                                               "~93", "~9",  "PENDING", "python3 scripts/batch_ingest_seu.py  (ingests all in one command)"),
+    ]
+    for rd in repo_dirs:
+        is_total = rd[0] == "TOTAL"
+        for j, val in enumerate(rd):
+            if j == 4:
+                status_cell(ws, r, j + 1, val)
+            elif j == 5:
+                c = ws.cell(row=r, column=6, value=val)
+                c.font = Font(name="Courier New", size=8, color="000000", bold=is_total)
+                c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
+                c.alignment = _align("left", "center", wrap=True)
+                c.border = _border(style="hair")
+                ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=COLS)
+            else:
+                data_cell(ws, r, j + 1, val, bold=(is_total or j == 0),
+                          align="center" if j in (2, 3) else "left",
+                          wrap=(j == 1))
+        ws.row_dimensions[r].height = 24
+        r += 1
+    r += 2
+
     # ── Key Tables
     section_header(ws, r, 1, "  KEY TABLES  (PostgREST access: {SUPABASE_URL}/rest/v1/<table>)", span=COLS)
     r += 1
@@ -660,7 +787,8 @@ def build_corpus(ws):
                 c.border = _border(style="hair")
                 ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=COLS)
             else:
-                data_cell(ws, r, j + 1, val, bold=(j == 0), align="left")
+                data_cell(ws, r, j + 1, val, bold=(j == 0),
+                          align="left", wrap=(j == 2))
         r += 1
     r += 2
 
@@ -728,7 +856,7 @@ def build_corpus(ws):
                           align="center" if j == 0 else "left")
         r += 1
 
-    widths = [5, 44, 54, 32, 10, 10, 10, 10]
+    widths = [32, 48, 42, 26, 34, 12, 8, 8]
     for i, w in enumerate(widths):
         ws.column_dimensions[get_column_letter(i + 1)].width = w
 
@@ -799,10 +927,12 @@ def build_strategy(ws):
     # ── Phase Roadmap
     section_header(ws, r, 1, "  PHASE ROADMAP  (technical phases)", span=COLS)
     r += 1
-    h2 = ["Phase", "Focus", "Status", "What Was Built", "Remaining"]
-    for i, hh in enumerate(h2):
-        col_header(ws, r, i + 1, hh)
+    col_header(ws, r, 1, "Phase")
+    col_header(ws, r, 2, "Focus")
+    col_header(ws, r, 3, "Status")
+    col_header(ws, r, 4, "What Was Built")
     ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=5)
+    col_header(ws, r, 6, "Remaining")
     ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=COLS)
     r += 1
     phases = [
@@ -816,13 +946,15 @@ def build_strategy(ws):
         data_cell(ws, r, 2, phase[1], bold=True, align="left")
         status_cell(ws, r, 3, phase[2])
         for col_off, val in enumerate([phase[3], phase[4]]):
-            c = ws.cell(row=r, column=4 + col_off * 2, value=val)
+            col_s = 4 + col_off * 2
+            col_e = col_s + 1 if col_off == 0 else COLS
+            c = ws.cell(row=r, column=col_s, value=val)
             c.font = Font(size=9, color="000000")
             c.fill = _fill(C_LGRAY) if r % 2 == 0 else _fill(C_WHITE)
             c.alignment = _align("left", "center", wrap=True)
             c.border = _border(style="hair")
-            ws.merge_cells(start_row=r, start_column=4 + col_off * 2,
-                           end_row=r, end_column=5 + col_off * 2)
+            ws.merge_cells(start_row=r, start_column=col_s,
+                           end_row=r, end_column=col_e)
         ws.row_dimensions[r].height = 54
         r += 1
     r += 2

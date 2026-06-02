@@ -56,7 +56,7 @@ Deployed on Railway. `Procfile` defines **eight independent processes** — they
 **Note on session architecture (three distinct StringSessions — identity-based names):**
 - `TELEGRAM_LISTENER_GHAYTH_SESSION` (غيث, +966582282200) — passive listener account; used by `listener` (rumman_engine.py). Backward-compat fallback: `TELEGRAM_GHAYTH_SESSION` → `TELEGRAM_SESSION_STRING` accepted during Railway transition.
 - `TELEGRAM_BACKFILL_RAWI_SESSION` (راوي, +966590111167) — dedicated backfill account; used by `backfill` (telegram_backfill_worker.py)
-- `TELEGRAM_MEDIA_IBRAHIM_SESSION` (إبراهيم, +966560064766) — media/OCR/file-download account; used by `media` (telegram_download_worker.py)
+- `TELEGRAM_MEDIA_IBRAHIM_SESSION` (إبراهيم, +966560064766) — media/OCR/file-download account; used by `media` (telegram_download_worker.py). Legacy fallback: `TELEGRAM_BAYAN_SESSION` still accepted during transition.
 
 Never run two processes on the same StringSession simultaneously — causes `AuthKeyDuplicatedError`.
 

@@ -217,7 +217,6 @@ def main():
         log("")
         grand_total += backfill_table(table)
 
-    elapsed = time.time()
     log("")
     log(f"=== ALL DONE — {grand_total:,} total rows backfilled ===")
     log("Next: python3 scripts/refresh_course_profiles.py")

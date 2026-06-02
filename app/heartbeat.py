@@ -6,7 +6,7 @@ Usage:
     hb = Heartbeat(http, worker_id="embed_worker", service_name="embed", interval_s=30)
     await hb.beat(status="running", metadata={"jobs": 5})
 
-Writes to worker_heartbeats (migration 016 schema) via PostgREST upsert.
+Writes to worker_heartbeats (migration 023 schema) via PostgREST upsert.
 Silently skips on any error — heartbeat failures must never crash a worker.
 """
 

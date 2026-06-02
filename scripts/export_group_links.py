@@ -22,7 +22,6 @@ from dotenv import dotenv_values
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import ExportChatInviteRequest
-from telethon.tl.functions.messages import ExportChatInviteRequest
 from telethon.tl.types import Channel, Chat
 from telethon.errors import (
     ChatAdminRequiredError, UserNotParticipantError,

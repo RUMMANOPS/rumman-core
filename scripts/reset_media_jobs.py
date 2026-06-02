@@ -2,9 +2,9 @@
 """
 reset_media_jobs.py — Reset failed telegram_media jobs back to pending.
 
-Run ONLY after confirming TELEGRAM_BAYAN_SESSION is correctly set in Railway
-and the media_worker is successfully connecting (check Railway logs for
-DOWNLOAD_WORKER_READY).
+Run ONLY after confirming TELEGRAM_MEDIA_IBRAHIM_SESSION (canonical) or
+TELEGRAM_BAYAN_SESSION (fallback) is set in Railway and the media_worker is
+successfully connecting (check Railway logs for DOWNLOAD_WORKER_READY).
 
 Usage:
     python3 scripts/reset_media_jobs.py --dry-run   # count only
@@ -12,9 +12,9 @@ Usage:
 
 Background:
     11,357 telegram_media jobs failed with "Cannot send requests while
-    disconnected" because the worker was reading TELEGRAM_MEDIA_IBRAHIM_SESSION
-    (old name) instead of TELEGRAM_BAYAN_SESSION (canonical). The session env
-    var was never set under the old name in Railway.
+    disconnected" because the media session env var was not set in Railway.
+    The worker reads TELEGRAM_MEDIA_IBRAHIM_SESSION first (canonical),
+    then falls back to TELEGRAM_BAYAN_SESSION.
 
     After deploying the fix in telegram_download_worker.py and confirming the
     worker connects successfully, run this script to re-queue all failed jobs.

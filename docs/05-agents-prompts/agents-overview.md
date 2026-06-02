@@ -94,4 +94,4 @@ See `docs/05-agents-prompts/prompt-registry.md` for the complete history of prom
 
 ## Quality Monitoring
 
-`query_logs` captures `detected_intent`, `synthesis_tokens`, `response_time_ms`, `result_count`. Watch `result_count = 0` as a knowledge gap signal. `feedback` table provides direct student quality signal.
+`learning_events` captures `intent_type`, `synthesis_tokens`, `latency_ms`, `result_count` (via metadata). Watch `event_type = 'zero_result'` as a knowledge gap signal. (`query_logs` was dropped in migration 016 — use `learning_events` for all analytics.)

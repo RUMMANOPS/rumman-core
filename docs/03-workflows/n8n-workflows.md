@@ -36,9 +36,9 @@ n8n does NOT ingest messages (that's `rumman_engine.py`), does NOT embed content
 |---|---|---|---|---|
 | `WF-001` | Daily Brief — Send | 08:00 AST daily | Run `daily_brief.py` → format → post to admin Telegram channel | Planned |
 | `WF-002` | Document Stale Alert | Weekly (Sunday 09:00) | Check `knowledge_manifest.json` last-updated dates → notify if doc past refresh window | Planned |
-| `WF-003` | Bot Error Rate Alert | Every 15 min | Query `query_logs` for error rate spike → notify operator via Telegram | Planned |
+| `WF-003` | Bot Error Rate Alert | Every 15 min | Query `learning_events` for error rate spike → notify operator via Telegram | Planned |
 | `WF-004` | New Exam Detected | `intelligence_items` insert (exam_date type) | Format and post to relevant college channel | Planned |
-| `WF-005` | Weekly Knowledge Gap Report | Monday 09:00 | Query `query_logs` for unanswered queries → surface coverage gaps | Planned |
+| `WF-005` | Weekly Knowledge Gap Report | Monday 09:00 | Query `learning_events` (zero_result events) for unanswered queries → surface coverage gaps | Planned |
 | `WF-006` | Low Feedback Score Alert | Daily | Query `feedback` for sessions with low ratings → surface to operator | Planned |
 
 ### Phase 3 Workflows (Multi-University)

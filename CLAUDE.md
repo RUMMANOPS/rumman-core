@@ -149,7 +149,7 @@ Operational CLI tools in `scripts/`. All require `.env` with `SUPABASE_URL`, `SU
 |---|---|
 | `ingest_document.py` | Ingest a local file into the knowledge pipeline (upload → pdf_extract job → embed_chunk job) |
 | `batch_ingest_seu.py` | Bulk-ingest all 93 SEU knowledge repository documents in priority order |
-| `seed_courses.py` | Seed structured course data from `scripts/data/seu_courses.json` into `inst_courses` |
+| `seed_courses.py` | Seed structured course data from `scripts/data/inst_courses.json` into `inst_courses` |
 | `create_backfill_jobs.py` | Create `telegram_backfill_jobs` rows for specified chat IDs |
 | `generate_seed_lexicon.py` | Generate normalization dictionary candidates from corpus — outputs to `data/seed_candidates_*.json` (gitignored) |
 | `review_candidates.py` | Interactive review of lexicon candidates before adding to `data/normalization_dict.json` |

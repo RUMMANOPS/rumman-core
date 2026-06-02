@@ -1,54 +1,67 @@
 # Current Architecture
 
+*Last updated: 2026-06-02 — Phase 2 complete. See RUMMAN_MASTER_DOSSIER.md for complete system detail.*
+
 ## Overview
 
-RUMMAN currently uses Telegram as an input source, Railway as the runtime environment, Supabase as the operational database, GitHub as the code and documentation source of truth, and n8n as an orchestration layer.
+RUMMAN runs as **eight independent processes** on Railway. All share Supabase as the coordination and data plane. Processes communicate exclusively via Postgres tables — no inter-process HTTP calls, no message brokers.
 
-## Current Runtime Processes
+n8n is **not yet deployed**. It is planned for orchestration in a future phase. See `docs/03-workflows/n8n-workflows.md`.
 
-Defined in Procfile:
+## Runtime Processes (Current Procfile)
 
-- listener: runs live Telegram ingestion.
-- audio: handles audio/media pipeline.
-- backfill: runs historical Telegram backfill worker on demand.
+```
+listener:     python3 app/rumman_engine.py
+backfill:     python3 app/telegram_backfill_worker.py
+media:        python3 app/telegram_download_worker.py
+embed:        python3 app/embed_worker.py
+search:       uvicorn app.search_api:app --host 0.0.0.0 --port ${PORT:-8000}
+bot:          python3 app/telegram_bot.py
+intelligence: python3 app/intelligence_worker.py          [gated: INTELLIGENCE_WORKER_ENABLED=true]
+attribution:  python3 app/attribution_worker.py           [gated: ATTRIBUTION_WORKER_ENABLED=true]
+```
 
-## Current Design
+See `docs/03-workflows/railway-processes.md` for full specifications of each process.
 
-Live ingestion and historical backfill are separated.
+## Three-Layer Architecture Status
 
-The live listener only handles new messages and writes them to Supabase.
+RUMMAN is built across three explicitly separated architectural layers (ADR-0005).
 
-The backfill worker processes old messages through controlled jobs stored in Supabase.
+### Layer 1 — Data Spine (Operational)
+Ingestion, synchronization, raw artifact storage, job queues, lease coordination, operational state, tenant management.
 
-## What n8n Is For
+Workers: `listener`, `backfill`, `media` (ingestion side)
 
-n8n is not the core brain.
+### Layer 2 — Knowledge Layer (Operational)
+Extraction pipelines (OCR, transcription, document parsing), semantic chunking, embedding generation, course attribution.
 
-n8n is the orchestration layer for workflows, notifications, integrations, and triggering processes.
+Workers: `media` (extraction side), `embed`, `attribution`
+
+Layer 2 is functionally operational as of Phase 2. The formal `knowledge_artifacts` / `knowledge_chunks` schema described in ADR-0007 is the target architecture; the current production implementation uses `source_documents` + `document_chunks` as the pragmatic equivalent.
+
+### Layer 3 — Intelligence Layer (Gated, Active)
+Operational item extraction, intelligence synthesis, student context, search and synthesis.
+
+Workers: `intelligence` (gated by INTELLIGENCE_WORKER_ENABLED), `search`, `bot`
+
+The intelligence worker is in the Procfile and enabled in Railway (`INTELLIGENCE_WORKER_ENABLED=true`) as of Phase 2. The gate condition — stable Layer 2 extraction — was satisfied before enabling.
+
+## Design Invariants
+
+**Live ingestion and backfill are permanently separated.** (ADR-0002) The listener never calls `iter_messages`. The backfill worker never handles live messages.
+
+**Layer boundary rule.** Layer 3 workers do not read raw messages or raw_artifacts directly. They read from Layer 2 outputs (document_chunks, intelligence_items, extracted_items). This makes the platform replayable, auditable, and multi-tenant safe.
+
+**Postgres as coordination plane.** Job queues, worker state, cursor positions, lease acquisition, heartbeats — everything in Postgres. The system is observable and debuggable from Postgres alone.
 
 ## What Supabase Is For
 
-Supabase is the operational data spine.
+Supabase is the operational data spine. See `docs/04-database/supabase-schema.md` for the full table inventory.
 
-It stores messages, sync state, jobs, media records, memories, tasks, decisions, deadlines, and insights.
-
-## Three-Layer Platform Model
-
-RUMMAN is evolving across three distinct architectural layers. Current code covers Layer 1.
-
-### Layer 1 — Data Spine (current)
-Ingestion, synchronization, raw artifact storage, job queues, lease coordination, operational state, tenant management. Everything in the current Procfile lives here.
-
-### Layer 2 — Knowledge Layer (next)
-Extraction pipelines (OCR, transcription, document parsing), semantic chunking, embedding generation, entity extraction, knowledge graph population. This layer transforms raw artifacts into queryable knowledge objects.
-
-### Layer 3 — Intelligence Layer (gated)
-Reasoning systems, operational memory synthesis, agents, copilots, recommendations. This layer is gated on Layer 2 being stable. `intelligence_worker.py` is a Layer 3 sketch; it must not be enabled until Layer 2 exists.
-
-## Current Rule
-
-Do not run uncontrolled Telegram historical crawling inside the live listener.
-
-## Layer Boundary Rule
-
-Do not implement Layer 3 behavior in Layer 1 workers. Do not skip Layer 2. Every piece of organizational knowledge must pass through extraction and normalization (Layer 2) before reaching intelligence (Layer 3). This is what makes the platform replayable, auditable, and multi-tenant safe.
+Key concern areas:
+- All Layer 1 ingestion state (messages, telegram_sync_state, telegram_backfill_jobs, processing_jobs)
+- All Layer 2 knowledge objects (source_documents, document_chunks with pgvector)
+- All Layer 3 intelligence (intelligence_items, extracted_items, message_signals, ai_runs)
+- Platform identity (tenants, rumman_users, rumman_sessions, student_context)
+- Institutional layer (inst_colleges, inst_specializations, inst_courses)
+- Observability (learning_events, worker_heartbeats, analysis_runs, gap_items)

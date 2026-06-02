@@ -123,10 +123,16 @@ The entity graph is not a separate graph database. It is Postgres tables. For mo
 
 ---
 
-## Current Status and Phase Gate
+## Current Status (Phase 2 — 2026-06-02)
 
-Layer 2 does not yet exist in code. The audio_worker.py contains a partial transcription implementation that will be the starting point for the knowledge_artifact pipeline.
+Layer 2 is functionally operational. The formal `knowledge_artifact` / `knowledge_chunks` schema described in this document is the target architecture; the current production implementation uses an equivalent pragmatic approach:
 
-Layer 2 must be operational before Layer 3 is enabled. The specific gate conditions are documented in ADR-0005.
+- `telegram_download_worker.py` performs OCR, transcription, text extraction (Layer 2 extraction pipeline)
+- `embed_worker.py` performs chunking + embedding into `document_chunks` (Layer 2 chunking + embedding)
+- `attribution_worker.py` classifies chunks to courses via regex + LLM (Layer 2 entity tagging)
+- `document_chunks` with VECTOR(3072) embeddings serves as the `knowledge_chunks` equivalent
+- `source_documents` serves as the `knowledge_artifact` equivalent
 
-The first Layer 2 milestone is: audio transcription produces a `knowledge_artifact` row (not just an `extracted_text` column in `media_files`) with proper traceability, versioning, and tenant_id.
+The formal refactoring to the `knowledge_artifact` entity model (with versioning, modality-agnostic shape, entity graph) is a future migration. The current implementation satisfies the functional requirement: raw artifacts → structured queryable knowledge → intelligence layer.
+
+Layer 3 (`intelligence_worker.py`) is enabled in Railway (`INTELLIGENCE_WORKER_ENABLED=true`), consistent with the gate condition that Layer 2 be stable before Layer 3 activation.

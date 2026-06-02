@@ -1,7 +1,20 @@
 # RUMMAN System Map
-**Last updated:** 2026-05-31 | **Phase:** 2 (In Progress)
+**Last updated:** 2026-05-31 | **Phase:** 2 (**Complete** as of 2026-06-01)
 
-This is the single reference document for RUMMAN's current state. It is a snapshot, not a living architecture doc — update it when the system changes materially.
+⚠️ **THIS DOCUMENT IS STALE.** Specific known errors:
+- All corpus counters are wrong (messages, chunks, source docs — see RUMMAN_MASTER_DOSSIER.md §7 for current numbers)
+- Session variable names are wrong — see CLAUDE.md for current env var names
+- Embedding model listed as `text-embedding-3-small` — actual model is `text-embedding-3-large`
+- Shows 3 Procfile processes — actual count is 8 (see `docs/03-workflows/railway-processes.md`)
+- `intelligence_items = 0` is wrong — worker is enabled and producing items
+
+For current system state: read `RUMMAN_MASTER_DOSSIER.md` (repo root, produced 2026-06-01).
+For current process list: read `docs/03-workflows/railway-processes.md`.
+For current schema: read `docs/04-database/supabase-schema.md`.
+
+The architecture tree below reflects the process topology at 2026-05-31 and is preserved for historical context.
+
+---
 
 ---
 

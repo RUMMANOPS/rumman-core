@@ -44,20 +44,31 @@ These documents are derived from the running system. AI systems may update them 
 
 | Document | Tier | Purpose |
 |---|---|---|
-| `00-project-brain.md` | Invariant | Project compass — what RUMMAN is, current phase, core principle |
+| `00-project-brain.md` | Maintained | Project compass — what RUMMAN is, current phase, core principle |
 | `philosophy/vocabulary.md` | Invariant | Shared terminology — precise definitions for all load-bearing terms |
 | `philosophy/core-principles.md` | Invariant | Load-bearing beliefs that shape architectural decisions |
 | `constraints/hard-boundaries.md` | Invariant | Rules that must never be broken — single source |
-| `02-adrs/ADR-*.md` | Invariant (append-only) | Architectural decisions with context, rationale, and consequences |
+| `02-adrs/ADR-0001` | Invariant (append-only) | RUMMAN as Operational Intelligence OS |
+| `02-adrs/ADR-0002` | Invariant (append-only) | Live ingestion permanently separated from backfill |
+| `02-adrs/ADR-0003` | Invariant (append-only) | GitHub docs as source of truth |
+| `02-adrs/ADR-0004` | Invariant (append-only) | Multi-tenant platform direction |
+| `02-adrs/ADR-0005` | Invariant (append-only, partially superseded) | Three-layer platform architecture — Layer 2/3 now operational; see status note in file |
+| `02-adrs/ADR-0006` | Invariant (append-only, entity model superseded) | Canonical knowledge entities — production schema diverged; see RUMMAN_MASTER_DOSSIER.md §7 |
+| `02-adrs/ADR-0007` | Invariant (append-only) | Storage architecture — three storage systems |
+| `02-adrs/ADR-0008` | Invariant (append-only) | Telegram three-account session architecture |
+| `02-adrs/ADR-0009` | Invariant (append-only) | Direct PostgREST — no ORM, no Supabase client library |
+| `02-adrs/ADR-0010` | Invariant (append-only) | Anti-hallucination as architecture |
 | `01-architecture/claim-model.md` | Maintained | The core primitive — what a claim is and how it flows through the system |
-| `01-architecture/current-architecture.md` | Maintained | Current runtime topology and layer structure |
+| `01-architecture/current-architecture.md` | Maintained | Current runtime topology — 8 processes, three-layer status |
 | `01-architecture/data-spine.md` | Maintained | Layer 1 architecture and current gaps |
 | `01-architecture/ingestion-architecture.md` | Maintained | Ingestion pipeline, two-speed model |
-| `04-database/supabase-schema.md` | Maintained | Schema descriptions and table purposes |
-| `03-workflows/railway-processes.md` | Maintained | Runtime process lifecycle and deployment notes |
+| `04-database/supabase-schema.md` | Maintained | Schema descriptions — all tables through Phase 2 (migrations 001–033) |
+| `03-workflows/railway-processes.md` | Maintained | All 8 runtime processes, session architecture, deployment notes |
+| `03-workflows/n8n-workflows.md` | Maintained | Planned n8n workflow inventory (not yet deployed) |
 | `06-roadmap/roadmap.md` | Maintained | Phase structure and current status |
-| `07-knowledge-layer/knowledge-layer-overview.md` | Maintained | Layer 2 design and per-modality pipelines |
+| `07-knowledge-layer/knowledge-layer-overview.md` | Maintained | Layer 2 design, per-modality pipelines, current operational status |
 | `08-product-strategy/product-doctrine.md` | Maintained | Product identity, stage model, trust theory, monetization hypotheses, dependency analysis |
+| `RUMMAN_MASTER_DOSSIER.md` (repo root) | Generated | Complete institutional memory — produced at Phase 2 completion (2026-06-01) |
 
 ---
 

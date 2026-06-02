@@ -2,7 +2,16 @@
 
 ## Status
 
-Accepted
+Accepted — **Partially Superseded by Phase 2 completion (2026-06-01)**
+
+The three-layer model in this ADR remains the correct architectural direction. Two specific status claims are no longer accurate:
+1. "intelligence_worker.py is deliberately excluded from the Procfile" — it IS in the Procfile, gated by INTELLIGENCE_WORKER_ENABLED=true, and enabled in Railway.
+2. Layer 2 "Does not yet exist" — Layer 2 is functionally operational via embed_worker.py, telegram_download_worker.py, and attribution_worker.py.
+
+The formal knowledge_artifact / knowledge_chunks schema described in Layer 2 remains the target architecture. The current production implementation uses source_documents + document_chunks as the pragmatic equivalent.
+
+See ADR-0008 for the Telegram three-account session architecture decision.
+See `docs/07-knowledge-layer/knowledge-layer-overview.md` for current Layer 2 status.
 
 ## Context
 
@@ -65,9 +74,9 @@ RUMMAN is built across three explicitly separated architectural layers. Each lay
 - Access source platforms directly — it reads from raw_artifacts in Storage
 - Bypass the extraction job queue — all processing goes through jobs
 
-**Current status:** Does not yet exist. Audio transcription in audio_worker.py is a partial Layer 2 sketch embedded in Layer 1 infrastructure. It must be refactored when Layer 2 is formally built.
+**Current status (Phase 2 — 2026-06-01):** Functionally operational. `telegram_download_worker.py` (extraction), `embed_worker.py` (chunking + embedding into `document_chunks`), `attribution_worker.py` (course tagging) collectively perform Layer 2 responsibilities. The formal `knowledge_artifact`/`knowledge_chunks` entity model is the target architecture; `source_documents`+`document_chunks` is the current production equivalent.
 
-**Gate condition:** Layer 2 must be operational before Layer 3 is enabled.
+**Gate condition:** Layer 2 must be operational before Layer 3 is enabled. This condition was satisfied before activating `intelligence_worker`.
 
 ---
 
@@ -90,7 +99,7 @@ RUMMAN is built across three explicitly separated architectural layers. Each lay
 - Run without per-tenant cost controls in place
 - Run without a dead-letter path for failed extractions
 
-**Current status:** intelligence_worker.py is a sketch. It is deliberately excluded from the Procfile. Do not enable until Layer 2 exists and ai_runs table + cost controls are in place.
+**Current status (Phase 2 — 2026-06-01):** intelligence_worker.py IS in the Procfile, gated by INTELLIGENCE_WORKER_ENABLED=true. Enabled in Railway since Phase 2 completion. ai_runs table, 3K/day cost cap, and cursor-based dedup are in place. Gate conditions from this ADR were satisfied before activation.
 
 ---
 

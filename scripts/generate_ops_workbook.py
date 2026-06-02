@@ -205,7 +205,7 @@ def build_compass(ws):
     for line in [
         ("Operational intelligence platform for Saudi university students.", True),
         ("Ingests institutional knowledge (study plans, regulations, course descriptions) and live community", False),
-        ("intelligence (72K+ Telegram messages from student groups) to deliver grounded academic assistance.", False),
+        ("intelligence (148K+ Telegram messages from student groups) to deliver grounded academic assistance.", False),
         ("The corpus — not the AI — is the product. AI is the retrieval and synthesis lens.", True),
     ]:
         c = ws.cell(row=r, column=1, value=f"  {line[0]}")
@@ -273,13 +273,13 @@ def build_compass(ws):
     ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=COLS)
     r += 1
     numbers = [
-        ("Messages ingested",           "~72,000",           "June 2026", "Live Telegram messages across all tracked groups"),
+        ("Messages ingested",           "147,793",           "June 2026", "Live + backfilled Telegram messages across all tracked groups"),
         ("DB migrations applied",        "34 / 34",           "June 2026", "All Phase 2 migrations complete"),
         ("Railway processes",            "8",                 "June 2026", "6 always-on + 2 gated"),
         ("Telegram accounts",            "3",                 "June 2026", "غيث (listener), راوي (backfill), إبراهيم (media)"),
-        ("Course intelligence profiles", "338",               "June 2026", "Courses with any corpus coverage"),
+        ("Course intelligence profiles", "339",               "June 2026", "Courses with any corpus coverage"),
         ("Exam intelligence signals",    "263",               "June 2026", "Recurring exam topics by course/type"),
-        ("Message signals",              "1,000+",            "June 2026", "exam_emphasis, difficulty, professor_note, etc."),
+        ("Message signals",              "3,179",             "June 2026", "exam_emphasis, difficulty, professor_note, resource_rec, confusion_cluster"),
         ("Est. monthly infra cost",      "~$50–80 USD",       "June 2026", "Railway + Supabase + OpenAI (variable)"),
         ("Target price (Phase 1)",       "SAR 79 / semester", "Hypothesis","Finals Companion tier — never charge for AI answers"),
     ]
@@ -302,7 +302,7 @@ def build_compass(ws):
     section_header(ws, r, 1, "  10 THINGS A NEW PERSON MUST KNOW", span=COLS)
     r += 1
     things = [
-        "1.  The corpus is the moat. 72K+ Telegram messages + official docs are the differentiated asset. AI is replaceable; the indexed community knowledge is not.",
+        "1.  The corpus is the moat. 148K+ Telegram messages + official docs are the differentiated asset. AI is replaceable; the indexed community knowledge is not.",
         "2.  Three Telegram user accounts, one per worker type: غيث (listener), راوي (backfill), إبراهيم (media). NEVER share sessions — causes AuthKeyDuplicatedError.",
         "3.  All DB access is direct PostgREST over httpx. No ORM, no Supabase client library. See ADR-0009.",
         "4.  Backfill and live ingestion are permanently separated (ADR-0002). rumman_engine.py must never call iter_messages.",
@@ -372,7 +372,7 @@ def build_compass(ws):
         ("python3 scripts/weekly_report.py",                    "Weekly ops health report → posts to Telegram ops channel (requires RUMMAN_OPS_CHAT_ID)"),
         ("python3 scripts/gap_analyst.py",                      "Cluster zero-result learning_events → gap_items table (run monthly)"),
         ("python3 scripts/refresh_course_profiles.py",          "Recompute course_intelligence_profiles + exam_intelligence coverage metrics"),
-        ("python3 scripts/message_signal_worker.py",            "Extract typed signals from 72K message corpus → message_signals (one-time, ~$0.18)"),
+        ("python3 scripts/message_signal_worker.py",            "Extract typed signals from 148K message corpus → message_signals (already 3,179 signals; re-run to catch new messages)"),
         ("python3 scripts/eval_bot_quality.py",                 "10 test queries — synthesis quality baseline (run before charging students)"),
         ("python3 app/query_handler.py IT362 'exam topics'",    "Test query synthesis locally for a specific course (dev/debug only)"),
     ]
@@ -429,7 +429,7 @@ def build_systems(ws):
         ("Supabase Storage",     "Object Storage",  "(same as Supabase)",    "Included in Pro",       "Included","LIVE",   "YES", "(uses SUPABASE_KEY)",                                      "Bucket: rumman-content","Stores ingested PDFs (raw files deleted after extraction)"),
         ("OpenAI",               "AI / ML",         "rumman.ops@gmail.com",  "Pay-per-use",           "~$15–30", "LIVE",   "YES", "OPENAI_API_KEY",                                           "platform.openai.com",   "gpt-4o-mini + text-embedding-3-large. Cost varies with query volume."),
         ("Telegram — غيث",       "Comms (Listener)","Phone: +966582282200",  "Personal account",      "Free",    "LIVE",   "YES", "TELEGRAM_LISTENER_GHAYTH_SESSION, TELEGRAM_API_ID, TELEGRAM_API_HASH","t.me","Passive listener only. Never sends messages."),
-        ("Telegram — راوي",      "Comms (Backfill)","Phone: +966590111167",  "Personal account",      "Free",    "LIVE",   "YES", "TELEGRAM_BACKFILL_RAWI_SESSION",                           "t.me",                  "Historical ingestion. Must be joined to all 46+ groups."),
+        ("Telegram — راوي",      "Comms (Backfill)","Phone: +966590111167",  "Personal account",      "Free",    "LIVE",   "YES", "TELEGRAM_BACKFILL_RAWI_SESSION",                           "t.me",                  "Historical ingestion. Must be joined to all 102+ tracked groups."),
         ("Telegram — إبراهيم",   "Comms (Media)",   "Phone: +966560064766",  "Personal account",      "Free",    "LIVE",   "YES", "TELEGRAM_MEDIA_IBRAHIM_SESSION",                           "t.me",                  "Media/file download. Fallback: TELEGRAM_BAYAN_SESSION (legacy)."),
         ("Telegram Bot",         "Comms (Bot)",     "BotFather token",       "Free",                  "Free",    "LIVE",   "YES", "TELEGRAM_BOT_TOKEN",                                       "t.me/@RummanBot (verify)","Student-facing. Does NOT use a StringSession — uses BotFather token."),
         ("GitHub",               "Source Control",  "IbraSQ / RUMMANOPS",    "Free",                  "Free",    "LIVE",   "NO",  "—",                                                        "github.com/RUMMANOPS/rumman-core","Main branch. ADR-0003: docs in repo are source of truth."),
@@ -639,7 +639,7 @@ def build_processes(ws):
         ("gap_analyst.py",              "Analysis",    "Cluster zero-result learning_events into gap_items (signals corpus coverage holes)",                          "Monthly",            "YES",  "~$0.05"),
         ("refresh_course_profiles.py",  "Analysis",    "Recompute course_intelligence_profiles and exam_intelligence metrics per course",                             "After ingestion",    "NO",   "Free"),
         ("extract_exam_signals.py",     "Analysis",    "Extract recurring exam topics from message corpus → exam_intelligence table",                                 "Monthly",            "YES",  "~$0.10"),
-        ("message_signal_worker.py",    "Analysis",    "Extract typed signals (exam_emphasis, difficulty, professor_note, resource_rec) from 72K messages",          "Once + after ingest","YES",  "~$0.18"),
+        ("message_signal_worker.py",    "Analysis",    "Extract typed signals (exam_emphasis, difficulty, professor_note, resource_rec) from 148K messages",         "Once + after ingest","YES",  "~$0.35"),
         ("weekly_report.py",            "Reporting",   "Weekly ops + product health report → posts to Telegram ops channel (RUMMAN_OPS_CHAT_ID required)",           "Weekly",             "YES",  "~$0.05"),
         ("eval_bot_quality.py",         "QA",          "10 test queries; before/after synthesis quality comparison. Baseline before launch.",                         "Pre-launch / change","YES",  "~$0.05"),
         ("generate_seed_lexicon.py",    "Lexicon",     "Analyze document_chunks for non-standard terms → seed_candidates_<timestamp>.json (gitignored)",             "On demand",          "NO",   "Free"),
@@ -693,17 +693,19 @@ def build_corpus(ws):
     ws.merge_cells(start_row=r, start_column=4, end_row=r, end_column=COLS)
     r += 1
     metrics = [
-        ("Total messages ingested",          "~72,000",       "messages",                          "Live + backfilled Telegram messages"),
-        ("Unique groups tracked",             "46+",           "telegram_backfill_jobs",            "Mix of course groups, department channels"),
-        ("Course intelligence profiles",      "338",           "course_intelligence_profiles",      "Courses with any corpus coverage"),
+        ("Total messages ingested",          "147,793",       "messages",                          "Live + backfilled Telegram messages — as of June 2026"),
+        ("Telegram groups tracked",           "102",           "telegram_backfill_jobs",            "Total backfill_jobs rows; 20 completed, rest pending or running"),
+        ("Course intelligence profiles",      "339",           "course_intelligence_profiles",      "Courses with any corpus coverage computed"),
         ("Exam intelligence signals",         "263",           "exam_intelligence",                 "Recurring exam topics by (course, exam_type)"),
-        ("Message signals",                   "1,000+",        "message_signals",                   "exam_emphasis, difficulty, professor_note, resource_rec, confusion_cluster"),
-        ("Document chunks (embedded)",        "TBD",           "document_chunks",                   "Run: SELECT COUNT(*) FROM document_chunks WHERE embedding IS NOT NULL"),
-        ("Unattributed chunks",               "TBD",           "document_chunks",                   "WHERE course_code IS NULL — target for attribution worker"),
-        ("Official docs ingested",            "~9 of 93",      "source_documents",                  "93 total in knowledge repository. Bulk ingest via batch_ingest_seu.py"),
-        ("Student context records",           "TBD",           "student_context",                   "Enrolled courses per user — enables personalization"),
-        ("Intelligence items extracted",      "TBD",           "intelligence_items",                "Requires INTELLIGENCE_WORKER_ENABLED=true"),
-        ("Active extracted items",            "TBD",           "active_extracted_items (view)",     "Filtered: not rejected/superseded, within valid_until"),
+        ("Message signals",                   "3,179",         "message_signals",                   "exam_emphasis, difficulty, professor_note, resource_rec, confusion_cluster"),
+        ("Document chunks (embedded)",        "127,070",       "document_chunks",                   "Vector-embedded chunks available for retrieval — as of June 2026"),
+        ("Source documents (all types)",      "11,391",        "source_documents",                  "All ingested files: student exams, official docs, Telegram exports"),
+        ("Source docs (official types)",      "1,014",         "source_documents",                  "source_type IN (exam, study_plan, regulation, course_description) — incl. student-uploaded exams"),
+        ("SEU institutional repo ingested",   "~9 of 93",      "source_documents",                  "93 files in knowledge repository. Run batch_ingest_seu.py to complete bulk ingest."),
+        ("Intelligence items extracted",      "184",           "intelligence_items",                "Worker was gated — 184 from partial runs; enable INTELLIGENCE_WORKER_ENABLED for full corpus"),
+        ("Knowledge gap items",               "34",            "gap_items",                         "Clustered zero-result events from gap_analyst.py"),
+        ("Learning events logged",            "87",            "learning_events",                   "Search + synthesis events — low count confirms system not yet in wide use"),
+        ("Student context records",           "TBD",           "student_context",                   "Enrolled courses per user — populated when students register courses with bot"),
     ]
     for m in metrics:
         for j, val in enumerate(m):
@@ -902,10 +904,10 @@ def build_strategy(ws):
     r += 1
     identity = [
         ("Core thesis",          "Community knowledge, accumulated and organized, is the product. The AI is the retrieval and synthesis lens. The corpus is the moat."),
-        ("Who it serves",        "Saudi university students facing information asymmetry: unofficial knowledge is scattered across 46+ Telegram groups, official docs are inaccessible."),
+        ("Who it serves",        "Saudi university students facing information asymmetry: unofficial knowledge is scattered across 102+ Telegram groups, official docs are inaccessible."),
         ("The non-obvious bet",  "Students are not searching for an AI tutor. They want confidence before exams. Accumulated community intelligence (what the professor actually emphasizes, what appears in past exams) is what they will pay for."),
         ("What we are NOT",      "Not a search engine. Not an LLM wrapper. Not a tutoring service. Not a competitor to professors. Not a content creator."),
-        ("The defensibility",    "A competitor can copy the AI. They cannot copy 72K indexed messages from 46 student groups + 6 semesters of exam signals. The corpus is non-replicable."),
+        ("The defensibility",    "A competitor can copy the AI. They cannot copy 148K indexed messages from 102+ student groups + 6 semesters of exam signals. The corpus is non-replicable."),
         ("The north star",       "Every student at every Saudi university has a trusted academic companion that knows their courses, their professors, and their exam patterns."),
     ]
     for item in identity:
@@ -928,7 +930,7 @@ def build_strategy(ws):
         col_header(ws, r, i + 1, hh)
     r += 1
     stages = [
-        ("Stage 1", "Finals Companion",     "72-hour exam preparation assistant. Knows what the professor emphasizes, what past exams cover, and what the study plan requires.",   "CURRENT", "Bot live + corpus growing",              "Zero-result rate, query volume, corpus coverage by course", "One semester, one university, high-frequency use case"),
+        ("Stage 1", "Finals Companion",     "72-hour exam preparation assistant. Knows what the professor emphasizes, what past exams cover, and what the study plan requires. 148K messages indexed.",   "CURRENT", "Bot live + corpus growing",              "Zero-result rate, query volume, corpus coverage by course", "One semester, one university, high-frequency use case"),
         ("Stage 2", "Semester Companion",   "Full semester intelligence: assignment tracking, deadlines, announcements from all groups in one place.",                              "PLANNED", "Intelligence worker active + enough data", "Active weekly users, engagement depth",                     "Requires intelligence_items to be live and populated"),
         ("Stage 3", "Academic OS",          "Cross-course, cross-semester intelligence. Course selection, prerequisite mapping, grade optimization.",                              "PLANNED", "Stage 2 proven + expanded corpus",         "Retention, word-of-mouth coefficient",                      "Requires institutional data depth + validated trust"),
         ("Stage 4", "Multi-University",     "Expand to other Saudi universities (KFUPM, KSU, KAUST, private). Per-tenant corpus, shared infrastructure.",                         "PLANNED", "Stage 3 validated + tenant architecture",   "Universities onboarded, cross-tenant query patterns",       "Multi-tenant architecture already in codebase (tenant_id)"),
@@ -956,7 +958,7 @@ def build_strategy(ws):
     ws.merge_cells(start_row=r, start_column=6, end_row=r, end_column=COLS)
     r += 1
     phases = [
-        ("Phase 1", "Data spine + live ingestion",     "DONE",    "Listener, backfill, embed workers. message/chunk schema. 72K messages.",                  "—"),
+        ("Phase 1", "Data spine + live ingestion",     "DONE",    "Listener, backfill, embed workers. message/chunk schema. 147,793 messages, 127,070 chunks.",                  "—"),
         ("Phase 2", "Intelligence + synthesis layer",  "CURRENT", "search_api (FastAPI), telegram bot, intelligence_items, claim model, calendar injection, gap_analyst, QA mining, message signals, student context, course profiles.", "Enable intelligence worker. Ingest 93 official SEU docs. Populate college chat_id mapping."),
         ("Phase 3", "Personalization + scale",         "PLANNED", "—",                                                                                        "Cross-session memory depth, recommendation engine, multi-program coverage"),
         ("Phase 4", "Multi-university expansion",      "PLANNED", "—",                                                                                        "Tenant onboarding flow, per-university corpus isolation, billing"),
@@ -1154,7 +1156,7 @@ def build_open_items(ws):
         ("2", "Bulk-ingest 93 official SEU documents",                                               "Ibrahim", "OPEN",   "python3 scripts/batch_ingest_seu.py → python3 app/pdf_worker.py → embed_worker picks up"),
         ("3", "Populate inst_colleges.telegram_chat_ids",                                            "Ibrahim", "OPEN",   "SQL: UPDATE inst_colleges SET telegram_chat_ids='{chat_id,...}' WHERE name='...'"),
         ("4", "Enable intelligence worker (INTELLIGENCE_WORKER_ENABLED=true in Railway)",            "Ibrahim", "OPEN",   "Set env var in Railway → verify 011_intelligence_layer.sql applied → monitor ai_runs cost"),
-        ("5", "Run message_signal_worker.py on full 72K message corpus",                             "Ibrahim", "OPEN",   "python3 scripts/message_signal_worker.py (one-time, ~$0.18 cost)"),
+        ("5", "Re-run message_signal_worker.py to catch new messages (3,179 signals exist; 148K corpus)",  "Ibrahim", "OPEN",   "python3 scripts/message_signal_worker.py (incremental run on new messages since last run)"),
         ("6", "Run extract_exam_signals.py and refresh_course_profiles.py",                          "Ibrahim", "OPEN",   "python3 scripts/extract_exam_signals.py && python3 scripts/refresh_course_profiles.py"),
         ("7", "Run eval_bot_quality.py to baseline synthesis quality",                               "Ibrahim", "OPEN",   "python3 scripts/eval_bot_quality.py → document before/after for launch readiness"),
         ("8", "Define and document the student onboarding flow",                                     "Ibrahim", "OPEN",   "Decide: bot-first or web? Write the flow. Implement /help and welcome message improvements."),

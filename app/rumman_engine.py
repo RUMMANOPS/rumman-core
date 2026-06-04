@@ -477,6 +477,24 @@ async def main():
             await scan_for_listener_gaps(client, http)
             asyncio.create_task(_periodic_discovery_loop(client, http))
 
+            # Listener heartbeat — runs every 30s so worker_heartbeats stays fresh.
+            # Previously the listener had zero heartbeat tracking, making silent
+            # disconnects completely undetectable from the outside.
+            try:
+                from heartbeat import Heartbeat as _HB
+                _listener_hb = _HB(http, worker_id="listener_worker",
+                                   service_name="listener", interval_s=30)
+            except Exception:
+                _listener_hb = None
+
+            async def _listener_heartbeat_loop():
+                while True:
+                    await asyncio.sleep(30)
+                    if _listener_hb:
+                        await _listener_hb.beat(status="running", force=True)
+
+            _hb_task = asyncio.create_task(_listener_heartbeat_loop())
+
             @client.on(events.NewMessage)
             async def new_message_handler(event):
                 try:
@@ -515,7 +533,14 @@ async def main():
 
             print("\nLIVE LISTENER ACTIVE\n")
 
-            await client.run_until_disconnected()
+            try:
+                await client.run_until_disconnected()
+            finally:
+                _hb_task.cancel()
+                try:
+                    await _hb_task
+                except asyncio.CancelledError:
+                    pass
     finally:
         # Ensure the auth key is released on Telegram's side before any retry.
         try:

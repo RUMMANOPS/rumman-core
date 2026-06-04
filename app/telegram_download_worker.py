@@ -20,6 +20,7 @@ import base64
 import asyncio
 import hashlib
 import tempfile
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -106,6 +107,32 @@ def detect_language(text: str) -> Optional[str]:
     if latin > arabic * 2:
         return "en"
     return "mixed"
+
+
+async def reclaim_stale_processing_jobs(http: httpx.AsyncClient) -> None:
+    """Reset telegram_media / audio_transcribe jobs stuck in 'processing' for >30 min.
+
+    Called at startup and every 10 loop iterations to recover from worker crashes
+    that left jobs in 'processing' state without completing them. These jobs are
+    invisible to get_pending_jobs() because it only queries 'pending' and 'failed'.
+    """
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat()
+    r = await http.patch(
+        f"{SUPABASE_URL}/rest/v1/processing_jobs",
+        headers={**HEADERS, "Prefer": "return=representation"},
+        params={
+            "status": "eq.processing",
+            "job_type": "in.(audio_transcribe,telegram_media)",
+            "updated_at": f"lt.{cutoff}",
+        },
+        json={"status": "pending"},
+    )
+    if r.status_code >= 400:
+        log("RECLAIM_STALE_ERROR", status=r.status_code, error=r.text[:120])
+        return
+    reclaimed = r.json() if r.content else []
+    if reclaimed:
+        log("STALE_JOBS_RECLAIMED", count=len(reclaimed))
 
 
 async def get_pending_jobs(http: httpx.AsyncClient) -> list[dict]:
@@ -496,7 +523,16 @@ async def main():
                 except Exception:
                     hb = None
 
+                # Reclaim any jobs left in 'processing' by a previous crashed worker.
+                await reclaim_stale_processing_jobs(http)
+                loop_count = 0
+
                 while True:
+                    loop_count += 1
+                    # Periodically re-check for newly-stuck processing jobs.
+                    if loop_count % 10 == 0:
+                        await reclaim_stale_processing_jobs(http)
+
                     jobs = await get_pending_jobs(http)
                     if not jobs:
                         if hb:

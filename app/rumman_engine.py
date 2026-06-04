@@ -525,17 +525,29 @@ async def main():
 
 
 async def _run_with_retry():
-    """Outer retry loop: handles AuthKeyDuplicatedError from rolling restarts."""
-    RETRY_DELAY = 180  # seconds — 3 min gives Telegram time to release the auth key
+    """Outer retry loop: listener must never permanently exit.
+
+    AUTH_KEY_DUPLICATED: fixed 180s delay — Telegram needs time to release the key
+    after a rolling deploy brings up a new container before the old one stops.
+
+    All other errors: exponential backoff 30s → 60s → 120s … capped at 600s.
+    Previously this re-raised non-AKD exceptions, which caused Railway to exhaust
+    its restart counter and leave the listener permanently dead.
+    """
+    AUTH_KEY_DELAY = 180
+    backoff = 30
+    MAX_BACKOFF = 600
     while True:
         try:
             await main()
-            break  # clean exit
+            break  # only a clean intentional exit (never happens in production)
         except AuthKeyDuplicatedError:
-            print(f"AUTH_KEY_DUPLICATED | retrying in {RETRY_DELAY}s", flush=True)
-            await asyncio.sleep(RETRY_DELAY)
+            print(f"AUTH_KEY_DUPLICATED | retrying in {AUTH_KEY_DELAY}s", flush=True)
+            await asyncio.sleep(AUTH_KEY_DELAY)
+            backoff = 30  # reset backoff — this is a known transient condition
         except Exception as e:
-            print(f"FATAL_ERROR | {e}", flush=True)
-            raise
+            print(f"LISTENER_CRASH | {e} | retrying in {backoff}s", flush=True)
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF)
 
 asyncio.run(_run_with_retry())

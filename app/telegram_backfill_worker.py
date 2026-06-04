@@ -169,7 +169,7 @@ async def claim_job(http):
         "telegram_backfill_jobs",
         {
             "status": "eq.pending",
-            "order": "created_at.asc",
+            "order": "updated_at.asc",
             "limit": "1",
         },
     )
@@ -544,6 +544,22 @@ async def process_job(client, http, job):
 NO_JOBS_SLEEP_SECONDS = 30
 RECONNECT_SLEEP_SECONDS = 15
 GAP_FILL_JOB_TYPE = "telegram_gap_fill"
+# Renew the job lease every 2 min, independent of message throughput.
+# Lease window is LEASE_MINUTES (10 min default) — 5 renewals before expiry.
+HEARTBEAT_INTERVAL_SECONDS = 120
+
+
+async def _lease_renewal_task(http: httpx.AsyncClient, job_id: int) -> None:
+    """Background task: keeps the backfill job lease alive on a wall-clock timer.
+
+    Runs concurrently with process_job() so the lease never expires due to a
+    slow batch (e.g. many media messages requiring get_sender() + DB writes).
+    Cancelled by the caller when process_job() completes.
+    """
+    while True:
+        await asyncio.sleep(HEARTBEAT_INTERVAL_SECONDS)
+        await heartbeat(http, job_id)
+        print(f"LEASE_RENEWED | job_id={job_id}", flush=True)
 
 
 def _is_disconnect(e: Exception) -> bool:
@@ -748,10 +764,13 @@ async def main():
     print(f"TELEGRAM BACKFILL WORKER STARTING | session={'dedicated' if _BACKFILL_SESSION else 'missing'}", flush=True)
 
     async with httpx.AsyncClient(timeout=120) as http:
-        # At startup: create backfill jobs for any chats the listener has seen
-        # but that don't have a job yet (e.g. new groups joined while worker was off).
+        # At startup: housekeeping before connecting to Telegram.
+        # These are DB-only operations — safe to run even if Telegram is unreachable.
         await discover_missing_jobs(http)
         await release_stale_gap_fill_jobs(http)
+        # Release any backfill jobs whose lease expired while the worker was down.
+        # Moved to startup so stale leases are cleared even if Telegram auth fails.
+        await release_stale_running_jobs(http)
 
         try:
             from heartbeat import Heartbeat
@@ -819,6 +838,12 @@ async def main():
                         await asyncio.sleep(NO_JOBS_SLEEP_SECONDS)
                         continue
 
+                    # Run a background task that renews the lease every 2 minutes
+                    # regardless of batch throughput. Prevents lease expiry on
+                    # slow batches (media-heavy messages, Telegram rate limiting).
+                    renewal_task = asyncio.create_task(
+                        _lease_renewal_task(http, job["id"])
+                    )
                     try:
                         await process_job(client, http, job)
                     except AuthKeyDuplicatedError as e:
@@ -832,6 +857,12 @@ async def main():
                             break
                         print(f"BACKFILL_JOB_ERROR | job={job['id']} | {e}", flush=True)
                         await fail_job(http, job, e)
+                    finally:
+                        renewal_task.cancel()
+                        try:
+                            await renewal_task
+                        except asyncio.CancelledError:
+                            pass
 
             except AuthKeyDuplicatedError:
                 print(f"AUTH_KEY_DUPLICATED_at_connect | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)

@@ -549,7 +549,11 @@ async def process_job(client, http, job):
 
 
 NO_JOBS_SLEEP_SECONDS = 30
-RECONNECT_SLEEP_SECONDS = 15
+# 60s gives Telegram enough time to release the auth key after a network disconnect
+# before the worker reconnects. 15s was too short — a reconnect within 15s of a
+# dropped connection triggered AUTH_KEY_DUPLICATED because Telegram still saw the
+# old session as active (ghost connection). This applies to all non-AUTH_KEY errors.
+RECONNECT_SLEEP_SECONDS = 60
 # AUTH_KEY_DUPLICATED needs a long backoff — Telegram requires ~3 min to fully
 # release an auth key after a duplicate-session collision. 15s causes an infinite
 # rapid-retry loop during Railway rolling deploys (two containers race on the same

@@ -519,6 +519,13 @@ async def process_job(client, http, job):
             print(f"BACKFILL_DISCONNECT | chat={chat_name} | saved={processed} | {e}", flush=True)
             await save_partial_progress(http, job, processed, last_id, oldest_id, max_id)
             raise  # bubbles to main() reconnect loop
+        if isinstance(e, AuthKeyDuplicatedError):
+            # Save progress before AUTH_KEY_DUPLICATED propagates to main().
+            # Without this the job stays stuck in "running" and the lease expires
+            # silently because main() breaks (reconnect) without touching the job.
+            print(f"AUTH_KEY_IN_BATCH | chat={chat_name} | saving progress={processed}", flush=True)
+            await save_partial_progress(http, job, processed, last_id, oldest_id, max_id)
+            raise
         raise  # other errors bubble to fail_job
 
     done = processed == 0
@@ -543,6 +550,11 @@ async def process_job(client, http, job):
 
 NO_JOBS_SLEEP_SECONDS = 30
 RECONNECT_SLEEP_SECONDS = 15
+# AUTH_KEY_DUPLICATED needs a long backoff — Telegram requires ~3 min to fully
+# release an auth key after a duplicate-session collision. 15s causes an infinite
+# rapid-retry loop during Railway rolling deploys (two containers race on the same
+# StringSession). Match the listener's AUTH_KEY_DELAY of 180s.
+AUTH_KEY_BACKOFF_SECONDS = 180
 GAP_FILL_JOB_TYPE = "telegram_gap_fill"
 # Renew the job lease every 2 min, independent of message throughput.
 # Lease window is LEASE_MINUTES (10 min default) — 5 renewals before expiry.
@@ -818,7 +830,7 @@ async def main():
                         try:
                             await process_gap_fill_job(client, http, gap_job)
                         except AuthKeyDuplicatedError:
-                            print(f"AUTH_KEY_DUPLICATED | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+                            print(f"AUTH_KEY_DUPLICATED | sleeping {AUTH_KEY_BACKOFF_SECONDS}s", flush=True)
                             await finish_gap_fill_job(http, gap_job["id"], "pending")
                             break
                         except Exception as e:
@@ -847,8 +859,8 @@ async def main():
                     try:
                         await process_job(client, http, job)
                     except AuthKeyDuplicatedError as e:
-                        print(f"AUTH_KEY_DUPLICATED | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
-                        # process_job already saved partial progress; break inner to reconnect
+                        # process_job saved partial progress (AUTH_KEY_IN_BATCH handler above)
+                        print(f"AUTH_KEY_DUPLICATED | sleeping {AUTH_KEY_BACKOFF_SECONDS}s", flush=True)
                         break
                     except Exception as e:
                         if _is_disconnect(e):
@@ -865,7 +877,9 @@ async def main():
                             pass
 
             except AuthKeyDuplicatedError:
-                print(f"AUTH_KEY_DUPLICATED_at_connect | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
+                print(f"AUTH_KEY_DUPLICATED_at_connect | sleeping {AUTH_KEY_BACKOFF_SECONDS}s", flush=True)
+                await asyncio.sleep(AUTH_KEY_BACKOFF_SECONDS)
+                continue
             except (asyncio.TimeoutError, OSError, ConnectionError) as e:
                 print(f"CONNECT_FAILED | {e} | sleeping {RECONNECT_SLEEP_SECONDS}s", flush=True)
             except Exception as e:

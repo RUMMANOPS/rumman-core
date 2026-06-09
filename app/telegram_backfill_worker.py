@@ -45,6 +45,22 @@ def _channel_id(chat_id: int) -> int:
             return int(s[3:])
     return abs(chat_id)
 
+
+def _canonical_chat_id(chat_id: int, chat_type: str) -> str:
+    """Normalize platform_chat_id for storage in the messages table.
+
+    Channels and supergroups use the -100{bare_id} format to match what the
+    live listener (rumman_engine.py) writes. Without this, backfill and live
+    messages for the same channel land under different platform_chat_id values,
+    breaking deduplication and splitting the message corpus in two.
+
+    Groups, users, and private chats keep the raw str(chat_id) form.
+    """
+    if chat_type in ("channel", "megagroup") and chat_id > 0:
+        return f"-100{chat_id}"
+    return str(chat_id)
+
+
 HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -251,7 +267,7 @@ async def build_payload(msg, chat_name, chat_type, chat_id):
     return {
         "platform": "telegram_user_client",
         "platform_message_id": str(msg.id),
-        "platform_chat_id": str(chat_id),
+        "platform_chat_id": _canonical_chat_id(chat_id, chat_type),
         "telegram_chat_type": chat_type,
         "chat_name": chat_name,
         "platform_user_id": str(getattr(sender, "id", "")) if sender else None,

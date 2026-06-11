@@ -52,6 +52,7 @@ Deployed on Railway. `Procfile` defines **eight independent processes** — they
 | `bot` | `app/telegram_bot.py` | Student-facing Telegram bot: long-polls Telegram API, calls `/synthesize`, returns grounded answers. | Always on |
 | `intelligence` | `app/intelligence_worker.py` | Extract operational items (assignments, deadlines) from messages → `intelligence_items`. | Gated: `INTELLIGENCE_WORKER_ENABLED=true` |
 | `attribution` | `app/attribution_worker.py` | AI-assisted course attribution for untagged document chunks → `machine_asserted`. | Gated: `ATTRIBUTION_WORKER_ENABLED=true` |
+| `question_extraction` | `app/question_extraction_worker.py` | GPT-4o extraction of individual questions from exam source_documents → `exam_questions`. Pass 1: text+type+topics. Pass 2 (future): chapter numbers. | Gated: `QUESTION_EXTRACTION_WORKER_ENABLED=true` |
 
 **Note on session architecture (three distinct StringSessions — identity-based names):**
 - `TELEGRAM_LISTENER_GHAYTH_SESSION` (غيث, +966582282200) — passive listener account; used by `listener` (rumman_engine.py). Backward-compat fallback: `TELEGRAM_GHAYTH_SESSION` → `TELEGRAM_SESSION_STRING` accepted during Railway transition.

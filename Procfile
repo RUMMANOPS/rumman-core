@@ -6,4 +6,5 @@ search: uvicorn app.search_api:app --host 0.0.0.0 --port ${PORT:-8000}
 bot: python3 app/telegram_bot.py
 intelligence: python3 app/intelligence_worker.py
 attribution: python3 app/attribution_worker.py
+question_extraction: python3 app/question_extraction_worker.py
 watchdog: python3 scripts/watchdog.py

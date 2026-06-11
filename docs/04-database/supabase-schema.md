@@ -344,6 +344,40 @@ Top recurring exam topics per (course_code, exam_type), LLM-extracted from exam-
 
 ---
 
+### `exam_questions`
+Structured question bank — individual questions extracted from exam source_documents.
+
+**Added:** migration 035.
+
+**Key columns:**
+| Column | Type | Notes |
+|---|---|---|
+| `course_code` | TEXT | e.g. MGT312 |
+| `exam_type` | TEXT | 'midterm' \| 'final' \| 'quiz' \| 'general' |
+| `exam_year` | TEXT | e.g. '2024-2025' — extracted from document |
+| `chapter_numbers` | INT[] | [1, 3] — NULL until chapter_attribution_worker (Phase 2) |
+| `topic_tags` | TEXT[] | ['نظرية الألعاب'] — extracted in Pass 1 |
+| `question_text` | TEXT | Full question, Arabic or English |
+| `question_type` | TEXT | 'mcq' \| 'essay' \| 'calculation' \| 'true_false' \| 'unknown' |
+| `answer_options` | JSONB | MCQ only: [{"key": "أ", "text": "..."}] |
+| `model_answer` | TEXT | If answer key embedded in source |
+| `source_document_id` | UUID | FK → source_documents |
+| `extraction_confidence` | FLOAT | 0.0–1.0 |
+| `attribution_verified` | BOOL | Course attribution confirmed by second model pass |
+| `chapter_verified` | BOOL | Chapter confirmed by chapter_attribution_worker |
+
+**Written by:** `app/question_extraction_worker.py` (gated: `QUESTION_EXTRACTION_WORKER_ENABLED=true`)
+
+**Read by:** `search_api.py` (exam prep queries), mobile app REST
+
+**View:** `exam_question_stats` — counts per (course_code, exam_type) for display
+
+**Two-pass design:**
+- Pass 1 (question_extraction_worker): extracts questions + topic_tags + course attribution verify
+- Pass 2 (future chapter_attribution_worker): maps topic_tags → chapter_numbers using syllabi
+
+---
+
 ### `academic_calendar`
 SEU's official academic dates (1447H / 2025–2026).
 
@@ -440,3 +474,4 @@ Normalized knowledge gap records from `gap_analyst.py` runs.
 | 032 | `032_message_signals.sql` | `message_signals` table — typed signals from Telegram messages |
 | 033 | `033_backfill_tenant_id.sql` | Backfill missing `tenant_id` values across tables |
 | 034 | `034_match_documents_fix.sql` | Fix `match_documents()` — add `filter_tenant` UUID parameter, return `metadata` JSONB |
+| 035 | `035_exam_questions.sql` | `exam_questions` table + `question_extraction_status` on `source_documents` + `exam_question_stats` view |

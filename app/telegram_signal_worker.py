@@ -437,10 +437,22 @@ async def process_chat(
     platform_chat_id = chat["platform_chat_id"]
     chat_name        = chat["chat_name"]
 
-    cursor                     = await _get_cursor(http, platform_chat_id)
-    last_platform_message_id   = cursor.get("last_platform_message_id") if cursor else None
-    prev_count                 = cursor["processed_count"] if cursor else 0
-    prev_signals               = cursor["signal_count"] if cursor else 0
+    cursor       = await _get_cursor(http, platform_chat_id)
+    prev_count   = cursor["processed_count"] if cursor else 0
+    prev_signals = cursor["signal_count"] if cursor else 0
+
+    # Resolve last platform_message_id from the stored UUID cursor.
+    # The migration stores last_message_id (UUID); we need the Telegram
+    # sequential int to paginate _fetch_messages correctly.
+    last_platform_message_id = None
+    if cursor and cursor.get("last_message_id"):
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/messages",
+            headers=HEADERS,
+            params={"id": f"eq.{cursor['last_message_id']}", "select": "platform_message_id", "limit": "1"},
+        )
+        if r.status_code == 200 and r.json():
+            last_platform_message_id = r.json()[0].get("platform_message_id")
 
     batch_limit = min(BATCH_SIZE, remaining_budget) if remaining_budget > 0 else BATCH_SIZE
     messages    = await _fetch_messages(http, platform_chat_id, last_platform_message_id, batch_limit)
@@ -464,13 +476,14 @@ async def process_chat(
     )
 
     if raw_signals or stored:
+        drop_detail = ",".join(f"{k}={v}" for k, v in drop_log.items() if v)
         log("BATCH",
             chat=chat_name[:35],
             msgs=len(messages),
             raw=len(raw_signals),
             clean=len(clean_signals),
             stored=stored,
-            dropped=sum(drop_log.values()))
+            drops=f"({drop_detail})" if drop_detail else "0")
 
     return {
         "messages": len(messages),

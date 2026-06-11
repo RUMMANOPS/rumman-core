@@ -53,6 +53,9 @@ Deployed on Railway. `Procfile` defines **eight independent processes** — they
 | `intelligence` | `app/intelligence_worker.py` | Extract operational items (assignments, deadlines) from messages → `intelligence_items`. | Gated: `INTELLIGENCE_WORKER_ENABLED=true` |
 | `attribution` | `app/attribution_worker.py` | AI-assisted course attribution for untagged document chunks → `machine_asserted`. | Gated: `ATTRIBUTION_WORKER_ENABLED=true` |
 | `question_extraction` | `app/question_extraction_worker.py` | GPT-4o extraction of individual questions from exam source_documents → `exam_questions`. Pass 1: text+type+topics. Pass 2 (future): chapter numbers. | Gated: `QUESTION_EXTRACTION_WORKER_ENABLED=true` |
+| `topic_normalizer` | `app/topic_normalizer_worker.py` | Normalizes free-form topic_tags → `kg_topics` canonical registry + `kg_topic_aliases`. Updates `exam_questions.topic_ids`. | Gated: `TOPIC_NORMALIZER_WORKER_ENABLED=true` |
+| `syllabus_parser` | `app/syllabus_parser_worker.py` | Parses course syllabi (DOCX/PDF) → `kg_syllabi` + `kg_chapters`. Bootstrap mode reads local files; live mode polls source_documents. | Gated: `SYLLABUS_PARSER_WORKER_ENABLED=true` |
+| `chapter_attribution` | `app/chapter_attribution_worker.py` | Maps exam_questions → kg_chapters via topic embedding similarity. Sets chapter_id FK + chapter_verified=true. Calls refresh_chapter_stats(). | Gated: `CHAPTER_ATTRIBUTION_WORKER_ENABLED=true` |
 
 **Note on session architecture (three distinct StringSessions — identity-based names):**
 - `TELEGRAM_LISTENER_GHAYTH_SESSION` (غيث, +966582282200) — passive listener account; used by `listener` (rumman_engine.py). Backward-compat fallback: `TELEGRAM_GHAYTH_SESSION` → `TELEGRAM_SESSION_STRING` accepted during Railway transition.

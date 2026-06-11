@@ -7,4 +7,7 @@ bot: python3 app/telegram_bot.py
 intelligence: python3 app/intelligence_worker.py
 attribution: python3 app/attribution_worker.py
 question_extraction: python3 app/question_extraction_worker.py
+topic_normalizer: python3 app/topic_normalizer_worker.py
+syllabus_parser: python3 app/syllabus_parser_worker.py
+chapter_attribution: python3 app/chapter_attribution_worker.py
 watchdog: python3 scripts/watchdog.py

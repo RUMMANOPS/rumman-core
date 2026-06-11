@@ -250,6 +250,4 @@ async def main():
 
 
 if __name__ == "__main__":
-    import anyio
-    anyio.from_thread.run_sync(lambda: None)  # warmup
     asyncio.run(main())

@@ -289,7 +289,7 @@ async def _extract_questions(
             ],
             temperature=0.1,  # low temp for consistent extraction
             response_format={"type": "json_object"},
-            max_tokens=4096,
+            max_tokens=16384,
         )
         raw = resp.choices[0].message.content or "{}"
         result = json.loads(raw)

@@ -111,21 +111,32 @@ async def _find_similar_topic(http: httpx.AsyncClient, embedding: list[float]) -
 
 
 async def _upsert_topic(http: httpx.AsyncClient, canonical: dict, embedding: list[float]) -> Optional[str]:
+    name = canonical.get("canonical_name", "")
     payload = {
         "tenant_id":         TENANT_ID,
-        "canonical_name":    canonical.get("canonical_name", ""),
+        "canonical_name":    name,
         "canonical_name_ar": canonical.get("canonical_name_ar"),
         "domain":            canonical.get("domain"),
         "embedding":         embedding,
     }
     resp = await http.post(
-        f"{SUPABASE_URL}/rest/v1/kg_topics?on_conflict=canonical_name",
-        headers={**HEADERS, "Prefer": "resolution=merge-duplicates,return=representation"},
+        f"{SUPABASE_URL}/rest/v1/kg_topics",
+        headers={**HEADERS, "Prefer": "return=representation"},
         content=json.dumps(payload),
     )
     if resp.status_code in (200, 201):
         data = resp.json()
         return data[0]["id"] if isinstance(data, list) else data.get("id")
+    # Already exists — look up by canonical_name
+    lookup = await http.get(
+        f"{SUPABASE_URL}/rest/v1/kg_topics",
+        headers=HEADERS,
+        params={"canonical_name": f"eq.{name}", "select": "id", "limit": "1"},
+    )
+    if lookup.status_code == 200:
+        rows = lookup.json()
+        if rows:
+            return rows[0]["id"]
     log("UPSERT_TOPIC_ERROR", status=resp.status_code, body=resp.text[:200])
     return None
 

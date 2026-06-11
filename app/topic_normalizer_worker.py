@@ -74,7 +74,7 @@ def log(event: str, **kwargs):
 
 
 async def _embed(client: AsyncOpenAI, texts: list[str]) -> list[list[float]]:
-    resp = await client.embeddings.create(model=EMBED_MODEL, input=texts)
+    resp = await client.embeddings.create(model=EMBED_MODEL, input=texts, dimensions=1536)
     return [r.embedding for r in resp.data]
 
 

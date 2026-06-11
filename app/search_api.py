@@ -1366,12 +1366,84 @@ async def course_inventory(req: CourseInventoryRequest):
 
 
 # ---------------------------------------------------------------------------
+# Exam Bank — Domino 1
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/exam-bank/{course_code}/recurring")
+async def exam_bank_recurring(
+    course_code: str,
+    exam_type:   str | None = None,
+    limit:       int = 15,
+    user_id:     str | None = None,
+):
+    """
+    Recurring topics for a course sorted by how many distinct exam years they appear in.
+    Powers the /bank Telegram command and the Exam Bank screen.
+
+    Returns topics from exam_questions.topic_tags grouped by year.
+    Uses the get_recurring_topics RPC (migration 040).
+    """
+    course_code = course_code.upper().strip()
+    if exam_type and exam_type not in ("midterm", "final", "quiz", "general"):
+        raise HTTPException(status_code=400, detail="exam_type must be midterm|final|quiz|general")
+    if not 1 <= limit <= 30:
+        limit = 15
+
+    async with httpx.AsyncClient(timeout=10) as http:
+        rpc_resp = await http.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/get_recurring_topics",
+            headers=HEADERS,
+            json={
+                "p_course_code": course_code,
+                "p_tenant_id":   SEU_TENANT_ID,
+                "p_exam_type":   exam_type,
+                "p_limit":       limit,
+            },
+        )
+
+    if rpc_resp.status_code != 200:
+        log.error("exam_bank_rpc_error | course=%s | status=%d | %s",
+                  course_code, rpc_resp.status_code, rpc_resp.text[:200])
+        raise HTTPException(status_code=503, detail="exam bank temporarily unavailable")
+
+    topics = rpc_resp.json() or []
+
+    # Log student interaction (fire-and-forget) — foundation layer data collection
+    if user_id and topics:
+        asyncio.create_task(_log_exam_bank_view(user_id, course_code, exam_type))
+
+    return {
+        "course_code": course_code,
+        "exam_type":   exam_type,
+        "topic_count": len(topics),
+        "topics":      topics,
+    }
+
+
+async def _log_exam_bank_view(user_id: str, course_code: str, exam_type: str | None):
+    """Log student_interactions row for exam bank views — foundation layer."""
+    async with httpx.AsyncClient(timeout=5) as http:
+        await http.post(
+            f"{SUPABASE_URL}/rest/v1/student_interactions",
+            headers={**HEADERS, "Prefer": "return=minimal"},
+            json={
+                "tenant_id":    SEU_TENANT_ID,
+                "user_id":      user_id,
+                "interaction":  "viewed_recurring",
+                "entity_type":  "course_bank",
+                "course_code":  course_code,
+                "exam_type":    exam_type,
+            },
+        )
+
+
+# ---------------------------------------------------------------------------
 # Health
 # ---------------------------------------------------------------------------
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "version": "4.1"}
+    return {"status": "ok", "version": "4.2"}
 
 
 @app.get("/cache/stats")

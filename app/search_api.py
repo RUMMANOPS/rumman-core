@@ -1860,24 +1860,24 @@ def _build_recommended_actions(
     if backfill_failed > 0:
         actions.append({
             "priority": priority,
-            "action":   f"راوي يحتاج تحقق — {backfill_failed} backfill job(s) فاشلة",
-            "detail":   "افحص سجلات telegram_backfill_jobs حيث status='failed'",
+            "action":   f"راوي لم ينضم لـ {backfill_failed} قناة بعد",
+            "detail":   "أضف راوي لهذه القنوات ثم أعد تشغيل الاستيراد",
         })
         priority += 1
 
     if needs_official_review > 0:
         actions.append({
             "priority": priority,
-            "action":   f"{needs_official_review} سؤال(أسئلة) بانتظار مراجعة رسمية",
-            "detail":   "افحص community_qa حيث needs_official_review=true",
+            "action":   f"{needs_official_review} إجابة في الدليل تحتاج تحقق رسمي",
+            "detail":   "راجع دليل الإجابات الآنية وقارن مع اللوائح الرسمية",
         })
         priority += 1
 
     if needs_review > 0:
         actions.append({
             "priority": priority,
-            "action":   f"{needs_review} سؤال(أسئلة) في community_qa بانتظار مراجعة",
-            "detail":   "lifecycle_status='needs_review'",
+            "action":   f"{needs_review} إجابة تحتاج مراجعة قبل النشر للطلاب",
+            "detail":   "افتح دليل الإجابات وراجع الإجابات المعلّقة",
         })
         priority += 1
 
@@ -1910,24 +1910,57 @@ def _build_recommended_actions(
 
 # ── College-coverage helpers (module-level to avoid re-creation per request) ──
 
+# College mapping sourced from inst_colleges + inst_specializations in DB.
+# SEU has exactly 5 colleges — no engineering college.
+# ENGT = اللغة الإنجليزية والترجمة (under THEO), NOT engineering.
 _COLLEGE_PREFIX: dict[str, tuple[str, str]] = {
-    "IT": ("COMP", "حوسبة"), "IS": ("COMP", "حوسبة"),
-    "CS": ("COMP", "حوسبة"), "CIS": ("COMP", "حوسبة"),
-    "MGT": ("ADMIN", "إدارة أعمال"), "ACC": ("ADMIN", "إدارة أعمال"),
-    "FIN": ("ADMIN", "إدارة أعمال"), "MKT": ("ADMIN", "إدارة أعمال"),
-    "HRM": ("ADMIN", "إدارة أعمال"), "BUS": ("ADMIN", "إدارة أعمال"),
-    "LAW": ("LAW", "حقوق"), "LAG": ("LAW", "حقوق"),
-    "HLTH": ("HLTH", "علوم صحية"), "NUR": ("HLTH", "علوم صحية"),
-    "HSA": ("HLTH", "علوم صحية"), "PHR": ("HLTH", "علوم صحية"),
-    "ENGT": ("ENGT", "هندسة"),
-    "ENG": ("GEN", "مشترك"), "ISLM": ("GEN", "مشترك"),
-    "ARB": ("GEN", "مشترك"), "STAT": ("GEN", "مشترك"),
-    "MATH": ("GEN", "مشترك"), "GEN": ("GEN", "مشترك"),
+    # COMP — كلية الحوسبة والمعلوماتية
+    "IT":   ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    "CS":   ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    "IS":   ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    "CIS":  ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    "DS":   ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    "MCS":  ("COMP",    "كلية الحوسبة والمعلوماتية"),
+    # ADMIN — كلية العلوم الإدارية والمالية
+    "MGT":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "FIN":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "ACC":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "ACCT": ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "ECOM": ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "ECON": ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "HRM":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "MKT":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    "BUS":  ("ADMIN",   "كلية العلوم الإدارية والمالية"),
+    # HEALTH — كلية العلوم الصحية
+    "HLTH": ("HEALTH",  "كلية العلوم الصحية"),
+    "NUR":  ("HEALTH",  "كلية العلوم الصحية"),
+    "HSA":  ("HEALTH",  "كلية العلوم الصحية"),
+    "PHR":  ("HEALTH",  "كلية العلوم الصحية"),
+    "HCI":  ("HEALTH",  "كلية العلوم الصحية"),
+    "PH":   ("HEALTH",  "كلية العلوم الصحية"),
+    # THEO — كلية العلوم والدراسات النظرية
+    # (LAW = القانون, ENGT = اللغة الإنجليزية والترجمة, DM = الإعلام الإلكتروني)
+    "LAW":  ("THEO",    "كلية العلوم والدراسات النظرية"),
+    "LAG":  ("THEO",    "كلية العلوم والدراسات النظرية"),
+    "DM":   ("THEO",    "كلية العلوم والدراسات النظرية"),
+    "ENGT": ("THEO",    "كلية العلوم والدراسات النظرية"),
+    "ISLM": ("THEO",    "كلية العلوم والدراسات النظرية"),
+    "ARB":  ("THEO",    "كلية العلوم والدراسات النظرية"),
+    # GENERAL — مواد مشتركة
+    "ENG":  ("GENERAL", "مواد مشتركة"),
+    "STAT": ("GENERAL", "مواد مشتركة"),
+    "MATH": ("GENERAL", "مواد مشتركة"),
+    "GEN":  ("GENERAL", "مواد مشتركة"),
+    "SCI":  ("GENERAL", "مواد مشتركة"),
+    "PHYS": ("GENERAL", "مواد مشتركة"),
 }
-COLLEGE_ORDER = ["COMP", "ADMIN", "LAW", "HLTH", "ENGT", "GEN"]
+COLLEGE_ORDER = ["COMP", "ADMIN", "HEALTH", "THEO", "GENERAL"]
 _COLLEGE_LABELS = {
-    "COMP": "حوسبة", "ADMIN": "إدارة أعمال", "LAW": "حقوق",
-    "HLTH": "علوم صحية", "ENGT": "هندسة", "GEN": "مشترك",
+    "COMP":    "كلية الحوسبة والمعلوماتية",
+    "ADMIN":   "كلية العلوم الإدارية والمالية",
+    "HEALTH":  "كلية العلوم الصحية",
+    "THEO":    "كلية العلوم والدراسات النظرية",
+    "GENERAL": "مواد مشتركة",
 }
 
 
@@ -1966,6 +1999,7 @@ async def ops_status():
             cal_events,
             coverage_rows,
             recent_signals,
+            course_rows,
         ) = await asyncio.gather(
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.pending", "select": "id"}),
@@ -2004,6 +2038,11 @@ async def ops_status():
                 "select":     "course_code,signal_type",
                 "created_at": f"gte.{week_ago}",
                 "limit":      "1000",
+            }),
+            # Course names for labelling pulse results
+            _safe_json(http, f"{base}/inst_courses", {
+                "select": "code,name_ar,name_en",
+                "limit":  "500",
             }),
             return_exceptions=False,
         )
@@ -2076,14 +2115,26 @@ async def ops_status():
             "has_data": total > 0,
         })
 
-    # ── Student pulse (signals last 7 days) ──────────────────────────────────
+    # ── Course name lookup (from inst_courses) ───────────────────────────────
     import collections as _collections
+    _course_name: dict[str, str] = {}
+    for c in (course_rows if isinstance(course_rows, list) else []):
+        code = c.get("code", "")
+        name = c.get("name_ar") or c.get("name_en") or ""
+        if code and name:
+            _course_name[code] = name
+
+    # ── Student pulse (signals last 7 days) ──────────────────────────────────
     course_counter = _collections.Counter(
         s.get("course_code") for s in (recent_signals if isinstance(recent_signals, list) else [])
         if s.get("course_code")
     )
     student_pulse = [
-        {"course_code": cc, "signal_count": cnt}
+        {
+            "course_code":  cc,
+            "course_name":  _course_name.get(cc, ""),
+            "signal_count": cnt,
+        }
         for cc, cnt in course_counter.most_common(5)
     ]
 
@@ -2276,14 +2327,15 @@ function render(d){
   // Panel 1: Student Pulse
   let pulseHtml='';
   if(sp.length===0){
-    pulseHtml='<div class="empty-note">لا إشارات حديثة — الـ pilot يغطي 4 مقررات</div>';
+    pulseHtml='<div class="empty-note">لا إشارات حديثة هذا الأسبوع</div>';
   }else{
     sp.forEach(s=>{
       const dots=Math.min(10,Math.ceil(s.signal_count/10));
       let dhtml='';
       for(let i=0;i<dots;i++)dhtml+='<div class="pdot"></div>';
+      const nameHtml=s.course_name?`<span style="font-size:.74rem;color:#64748b;display:block;margin-top:1px">${s.course_name}</span>`:'';
       pulseHtml+=`<div class="pulse-row">
-        <span style="font-weight:600">${s.course_code}</span>
+        <div><span style="font-weight:600">${s.course_code}</span>${nameHtml}</div>
         <div style="display:flex;align-items:center;gap:8px">
           <div class="pulse-dots">${dhtml}</div>
           <span class="pulse-count">${s.signal_count}</span>
@@ -2336,7 +2388,32 @@ function render(d){
     <div class="qa-num-item"><div class="qa-num-val" style="color:#f59e0b">${qaNor}</div><div class="qa-num-lbl">تحتاج مراجعة رسمية</div></div>
   </div>${qaWarn}`;
 
-  // Technical details
+  // Services health bar
+  const svcDefs=[
+    {lbl:'غيث',  ok:true,                               warn:false},
+    {lbl:'راوي', ok:bf.total_running>0||bf.total_pending>0, warn:bf.total_failed>0},
+    {lbl:'التضمين', ok:sv.embed.total_pending>=0,       warn:sv.embed.total_pending>100},
+    {lbl:'الاستخراج', ok:sv.question_extraction.total_pending>=0, warn:sv.question_extraction.total_pending>50},
+    {lbl:'الوسائط', ok:sv.media.total_pending>=0,       warn:sv.media.total_pending>20},
+  ];
+  let svcHtml='';
+  svcDefs.forEach(s=>{
+    const col=s.warn?'#f59e0b':s.ok?'#22c55e':'#94a3b8';
+    svcHtml+=`<span style="display:inline-flex;align-items:center;gap:4px;font-size:.78rem;color:#cbd5e1">
+      <span style="width:7px;height:7px;border-radius:50%;background:${col};flex-shrink:0"></span>${s.lbl}</span>`;
+  });
+
+  // Key knowledge stats (always visible)
+  const statsHtml=`
+    <span style="color:#e2e8f0">${kn.exam_questions>=0?kn.exam_questions.toLocaleString():'?'}</span><span style="color:#64748b"> سؤال</span>
+    <span style="color:#475569;margin:0 4px">·</span>
+    <span style="color:#e2e8f0">${kn.document_chunks>=0?kn.document_chunks.toLocaleString():'?'}</span><span style="color:#64748b"> مقطع</span>
+    <span style="color:#475569;margin:0 4px">·</span>
+    <span style="color:#e2e8f0">${kn.source_documents>=0?kn.source_documents.toLocaleString():'?'}</span><span style="color:#64748b"> مصدر</span>
+    <span style="color:#475569;margin:0 4px">·</span>
+    <span style="color:#e2e8f0">${kn.telegram_signals.toLocaleString()}</span><span style="color:#64748b"> إشارة</span>`;
+
+  // Technical details (collapsed)
   const techHtml=`<table class="tech-table">
     <tr><td>أرشيف الاختبارات</td><td>${kn.exam_questions>=0?kn.exam_questions.toLocaleString():'?'} سؤال</td></tr>
     <tr><td>مقاطع المستندات</td><td>${kn.document_chunks>=0?kn.document_chunks.toLocaleString():'?'}</td></tr>
@@ -2350,6 +2427,10 @@ function render(d){
   </table>`;
 
   document.getElementById('main').innerHTML=`
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0 12px;border-bottom:1px solid #1e293b;margin-bottom:14px;flex-wrap:wrap;gap:8px">
+      <div style="display:flex;gap:12px;flex-wrap:wrap">${svcHtml}</div>
+      <div style="font-size:.78rem;text-align:left;direction:ltr;white-space:nowrap">${statsHtml}</div>
+    </div>
     <div class="grid2">
       <div class="card">
         <div class="card-title">نبض الطلاب هذا الأسبوع</div>

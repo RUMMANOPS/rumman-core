@@ -2144,8 +2144,7 @@ async def ops_status():
             coverage_rows,
             recent_signals,
             course_rows,
-            messages_total,
-            channels_total,
+            sync_state_rows,
         ) = await asyncio.gather(
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.pending", "select": "id"}),
@@ -2190,12 +2189,17 @@ async def ops_status():
                 "select": "code,name_ar,name_en",
                 "limit":  "500",
             }),
-            # Total messages (community asset size)
-            _safe_count(http, f"{base}/messages", {"select": "id"}),
-            # Total monitored channels
-            _safe_count(http, f"{base}/telegram_sync_state", {"select": "id"}),
+            # Channels + message totals: sum total_messages_seen across ~65 rows
+            # (avoids slow COUNT(*) on the 2M+ row messages table)
+            _safe_json(http, f"{base}/telegram_sync_state",
+                       {"select": "total_messages_seen"}),
             return_exceptions=False,
         )
+
+        # ── Messages + channels from sync state ──────────────────────────────
+        _ss = sync_state_rows if isinstance(sync_state_rows, list) else []
+        messages_total = sum((r.get("total_messages_seen") or 0) for r in _ss)
+        channels_total = len(_ss)
 
         # ── telegram_signals (may not exist) ─────────────────────────────────
         signals_total = 0

@@ -251,14 +251,31 @@ def _tenant_id_for_slug(slug: str) -> str:
     return SEU_TENANT_ID
 
 
+# Authority tier boosts applied at re-ranking time — authority_tier column exists since migration 015
+# on both source_documents and document_chunks and is returned by match_documents RPC.
+# Raw cosine similarity alone would let a 0.91-similarity community Telegram message outrank
+# a 0.88-similarity official exam document; this correction prevents that.
+_AUTHORITY_BOOST: dict[str, float] = {
+    "official":  0.05,
+    "verified":  0.02,
+    "community": 0.00,
+}
+
+
+def _effective_score(row: dict) -> float:
+    tier  = row.get("authority_tier") or row.get("source_authority") or "community"
+    boost = _AUTHORITY_BOOST.get(tier, 0.0)
+    return (row.get("similarity") or 0.0) + boost
+
+
 def _deduplicate(results: list[dict], limit: int) -> list[dict]:
-    """Keep highest-similarity result per unique content fingerprint."""
+    """Keep highest-authority-weighted result per unique content fingerprint."""
     seen: dict[str, dict] = {}
     for row in results:
         key = hashlib.md5((row.get("content") or "").encode()).hexdigest()
-        if key not in seen or (row.get("similarity") or 0) > (seen[key].get("similarity") or 0):
+        if key not in seen or _effective_score(row) > _effective_score(seen[key]):
             seen[key] = row
-    deduped = sorted(seen.values(), key=lambda r: r.get("similarity") or 0, reverse=True)
+    deduped = sorted(seen.values(), key=_effective_score, reverse=True)
     return deduped[:limit]
 
 

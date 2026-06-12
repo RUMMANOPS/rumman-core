@@ -1741,3 +1741,495 @@ async def _patch_session_focus(session_id: str, course_code: str, exam_type: str
             )
     except Exception as exc:
         log.warning("session focus update failed (non-fatal): %s", exc)
+
+
+# ---------------------------------------------------------------------------
+# Operations Cockpit — /ops/status + /ops
+# ---------------------------------------------------------------------------
+
+async def _safe_count(http: httpx.AsyncClient, url: str, params: dict) -> int:
+    """GET a PostgREST endpoint and return the integer count from the
+    Prefer:count=exact response header.  Returns -1 on any error."""
+    try:
+        r = await http.get(
+            url,
+            headers={**HEADERS, "Prefer": "count=exact"},
+            params={**params, "limit": "1"},
+            timeout=10,
+        )
+        if r.status_code >= 400:
+            return -1
+        cr = r.headers.get("content-range", "")  # e.g. "0-0/42"
+        total_part = cr.split("/")[-1] if "/" in cr else ""
+        return int(total_part) if total_part.lstrip("-").isdigit() else -1
+    except Exception:
+        return -1
+
+
+async def _safe_json(http: httpx.AsyncClient, url: str, params: dict) -> list:
+    """GET a PostgREST endpoint and return JSON list. Returns [] on error."""
+    try:
+        r = await http.get(url, headers=HEADERS, params=params, timeout=10)
+        if r.status_code >= 400:
+            return []
+        return r.json() or []
+    except Exception:
+        return []
+
+
+def _compute_academic_phase(events: list[dict]) -> dict:
+    """Derive current academic phase from academic_calendar rows."""
+    from datetime import date
+    today = date.today()
+
+    active_windows: list[str] = []
+    active_labels: list[str] = []
+    upcoming: list[dict] = []
+
+    for ev in events:
+        ev_type  = ev.get("event_type", "")
+        label_ar = ev.get("event_name_ar") or ev_type
+        start_s  = ev.get("start_date")
+        end_s    = ev.get("end_date")
+        if not start_s:
+            continue
+        try:
+            start_d = date.fromisoformat(start_s)
+            end_d   = date.fromisoformat(end_s) if end_s else start_d
+        except ValueError:
+            continue
+
+        if start_d <= today <= end_d:
+            active_windows.append(ev_type)
+            active_labels.append(label_ar)
+        elif start_d > today:
+            days_away = (start_d - today).days
+            upcoming.append({
+                "event_type": ev_type,
+                "label_ar":   label_ar,
+                "start_date": start_s,
+                "days_away":  days_away,
+            })
+
+    upcoming.sort(key=lambda x: x["days_away"])
+    upcoming = upcoming[:3]
+
+    # Determine phase
+    if any(w in active_windows for w in ("final_exam", "midterm_exam")):
+        phase = "exam"
+    elif any(w in active_windows for w in ("pre_exam_review", "exam_preparation")):
+        phase = "pre_exam"
+    elif any(w in active_windows for w in ("registration", "add_drop", "course_registration")):
+        phase = "registration"
+    elif any(w in active_windows for w in ("grade_release", "result_announcement")):
+        phase = "grade_release"
+    elif any(w in active_windows for w in ("semester_break", "vacation", "holiday")):
+        phase = "break"
+    elif active_windows:
+        phase = "regular"
+    else:
+        # Infer from nearest upcoming event
+        if upcoming:
+            nxt = upcoming[0]["event_type"]
+            if "exam" in nxt:
+                phase = "pre_exam"
+            else:
+                phase = "regular"
+        else:
+            phase = "regular"
+
+    return {
+        "phase":             phase,
+        "active_windows":    active_windows,
+        "active_labels_ar":  active_labels,
+        "upcoming":          upcoming,
+    }
+
+
+def _build_recommended_actions(
+    backfill_failed: int,
+    backfill_pending: int,
+    needs_review: int,
+    needs_official_review: int,
+    embed_pending: int,
+    upcoming: list[dict],
+) -> list[dict]:
+    actions: list[dict] = []
+    priority = 1
+
+    if backfill_failed > 0:
+        actions.append({
+            "priority": priority,
+            "action":   f"راوي يحتاج تحقق — {backfill_failed} backfill job(s) فاشلة",
+            "detail":   "افحص سجلات telegram_backfill_jobs حيث status='failed'",
+        })
+        priority += 1
+
+    if needs_official_review > 0:
+        actions.append({
+            "priority": priority,
+            "action":   f"{needs_official_review} سؤال(أسئلة) بانتظار مراجعة رسمية",
+            "detail":   "افحص community_qa حيث needs_official_review=true",
+        })
+        priority += 1
+
+    if needs_review > 0:
+        actions.append({
+            "priority": priority,
+            "action":   f"{needs_review} سؤال(أسئلة) في community_qa بانتظار مراجعة",
+            "detail":   "lifecycle_status='needs_review'",
+        })
+        priority += 1
+
+    for ev in upcoming[:1]:
+        if "exam" in ev.get("event_type", "") and ev.get("days_away", 99) <= 14:
+            actions.append({
+                "priority": priority,
+                "action":   f"اختبار قادم خلال {ev['days_away']} يوم — تحقق من تغطية الإشارات",
+                "detail":   f"{ev['label_ar']} يبدأ {ev['start_date']}",
+            })
+            priority += 1
+
+    if embed_pending > 50:
+        actions.append({
+            "priority": priority,
+            "action":   f"{embed_pending} chunk(s) في انتظار التضمين (embedding)",
+            "detail":   "تأكد أن embed worker يعمل على Railway",
+        })
+        priority += 1
+
+    if backfill_pending > 0 and backfill_failed == 0:
+        actions.append({
+            "priority": priority,
+            "action":   f"{backfill_pending} backfill job(s) معلقة",
+            "detail":   "راوي يعمل على المعالجة — لا إجراء مطلوب الآن",
+        })
+
+    return actions[:5]
+
+
+@app.get("/ops/status")
+async def ops_status():
+    """Operations status snapshot — all Supabase counts gathered in parallel."""
+    from datetime import datetime, timezone
+
+    base = f"{SUPABASE_URL}/rest/v1"
+
+    async with httpx.AsyncClient(timeout=10) as http:
+
+        # ── All parallel queries ──────────────────────────────────────────────
+        (
+            backfill_pending,
+            backfill_running,
+            backfill_failed,
+            qe_pending,
+            source_docs_total,
+            embed_pending,
+            intel_total,
+            exam_questions_total,
+            doc_chunks_total,
+            kg_topics_total,
+            cal_events,
+        ) = await asyncio.gather(
+            _safe_count(http, f"{base}/telegram_backfill_jobs",
+                        {"status": "eq.pending", "select": "id"}),
+            _safe_count(http, f"{base}/telegram_backfill_jobs",
+                        {"status": "eq.running", "select": "id"}),
+            _safe_count(http, f"{base}/telegram_backfill_jobs",
+                        {"status": "eq.failed", "select": "id"}),
+            _safe_count(http, f"{base}/source_documents",
+                        {"job_status": "eq.pending_extraction", "select": "id"}),
+            _safe_count(http, f"{base}/source_documents",
+                        {"select": "id"}),
+            _safe_count(http, f"{base}/processing_jobs",
+                        {"job_type": "eq.embed_chunk", "status": "eq.pending", "select": "id"}),
+            _safe_count(http, f"{base}/intelligence_items",
+                        {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"}),
+            _safe_count(http, f"{base}/exam_questions",
+                        {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"}),
+            _safe_count(http, f"{base}/document_chunks",
+                        {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"}),
+            _safe_count(http, f"{base}/kg_topics",
+                        {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"}),
+            _safe_json(http, f"{base}/academic_calendar", {
+                "tenant_id": f"eq.{SEU_TENANT_ID}",
+                "select":    "event_type,event_name_ar,start_date,end_date",
+                "order":     "start_date.asc",
+            }),
+            return_exceptions=False,
+        )
+
+        # ── telegram_signals (may not exist) ─────────────────────────────────
+        signals_total = 0
+        signals_last  = None
+        try:
+            sig_rows = await _safe_json(http, f"{base}/telegram_signals", {
+                "tenant_id": f"eq.{SEU_TENANT_ID}",
+                "select":    "id,created_at",
+                "order":     "created_at.desc",
+                "limit":     "1",
+            })
+            sig_count = await _safe_count(http, f"{base}/telegram_signals",
+                                          {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"})
+            signals_total = sig_count if sig_count >= 0 else 0
+            signals_last  = sig_rows[0].get("created_at") if sig_rows else None
+        except Exception:
+            pass
+
+        # ── media pending (telegram_media jobs) ──────────────────────────────
+        media_pending = await _safe_count(http, f"{base}/processing_jobs", {
+            "job_type": "eq.telegram_media",
+            "status":   "in.(pending,running)",
+            "select":   "id",
+        })
+
+        # ── community_qa (may not exist — migration 046) ─────────────────────
+        qa_total = qa_active = qa_draft = qa_needs_review = qa_needs_official = 0
+        try:
+            qa_total          = await _safe_count(http, f"{base}/community_qa",
+                                                  {"tenant_id": f"eq.{SEU_TENANT_ID}", "select": "id"})
+            qa_active         = await _safe_count(http, f"{base}/community_qa",
+                                                  {"tenant_id": f"eq.{SEU_TENANT_ID}",
+                                                   "lifecycle_status": "eq.active", "select": "id"})
+            qa_draft          = await _safe_count(http, f"{base}/community_qa",
+                                                  {"tenant_id": f"eq.{SEU_TENANT_ID}",
+                                                   "lifecycle_status": "eq.draft", "select": "id"})
+            qa_needs_review   = await _safe_count(http, f"{base}/community_qa",
+                                                  {"tenant_id": f"eq.{SEU_TENANT_ID}",
+                                                   "lifecycle_status": "eq.needs_review", "select": "id"})
+            qa_needs_official = await _safe_count(http, f"{base}/community_qa",
+                                                  {"tenant_id": f"eq.{SEU_TENANT_ID}",
+                                                   "needs_official_review": "eq.true", "select": "id"})
+            if qa_total < 0:
+                qa_total = qa_active = qa_draft = qa_needs_review = qa_needs_official = 0
+        except Exception:
+            pass
+
+    # ── Academic phase ────────────────────────────────────────────────────────
+    academic = _compute_academic_phase(cal_events if isinstance(cal_events, list) else [])
+
+    # ── Recommended actions ───────────────────────────────────────────────────
+    actions = _build_recommended_actions(
+        backfill_failed=max(backfill_failed, 0),
+        backfill_pending=max(backfill_pending, 0),
+        needs_review=max(qa_needs_review, 0),
+        needs_official_review=max(qa_needs_official, 0),
+        embed_pending=max(embed_pending, 0),
+        upcoming=academic["upcoming"],
+    )
+
+    qe_completed = (source_docs_total - qe_pending) if source_docs_total >= 0 and qe_pending >= 0 else -1
+
+    return {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "academic": academic,
+        "services": {
+            "backfill": {
+                "total_pending": max(backfill_pending, 0) if backfill_pending >= 0 else -1,
+                "total_running": max(backfill_running, 0) if backfill_running >= 0 else -1,
+                "total_failed":  max(backfill_failed,  0) if backfill_failed  >= 0 else -1,
+            },
+            "question_extraction": {
+                "total_completed": max(qe_completed, 0) if qe_completed >= 0 else -1,
+                "total_pending":   max(qe_pending, 0)   if qe_pending   >= 0 else -1,
+            },
+            "embed": {
+                "total_pending": max(embed_pending, 0) if embed_pending >= 0 else -1,
+            },
+            "signals": {
+                "total":           signals_total,
+                "last_stored_at":  signals_last,
+            },
+            "intelligence": {
+                "total": max(intel_total, 0) if intel_total >= 0 else -1,
+            },
+            "media": {
+                "disabled":      False,
+                "total_pending": max(media_pending, 0) if media_pending >= 0 else -1,
+            },
+        },
+        "knowledge": {
+            "exam_questions":    max(exam_questions_total, 0) if exam_questions_total >= 0 else -1,
+            "source_documents":  max(source_docs_total,    0) if source_docs_total    >= 0 else -1,
+            "document_chunks":   max(doc_chunks_total,     0) if doc_chunks_total     >= 0 else -1,
+            "kg_topics":         max(kg_topics_total,      0) if kg_topics_total      >= 0 else -1,
+            "telegram_signals":  signals_total,
+        },
+        "operational_qa": {
+            "total":                  max(qa_total,          0) if qa_total          >= 0 else -1,
+            "active":                 max(qa_active,         0) if qa_active         >= 0 else -1,
+            "draft":                  max(qa_draft,          0) if qa_draft          >= 0 else -1,
+            "needs_review":           max(qa_needs_review,   0) if qa_needs_review   >= 0 else -1,
+            "needs_official_review":  max(qa_needs_official, 0) if qa_needs_official >= 0 else -1,
+        },
+        "recommended_actions": actions,
+    }
+
+
+@app.get("/ops")
+async def ops_cockpit():
+    """RUMMAN Operations Cockpit — self-contained HTML dashboard."""
+    from fastapi.responses import HTMLResponse
+    html = """<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>RUMMAN Operations Cockpit</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;padding:16px}
+h1{font-size:1.3rem;font-weight:700;color:#f8fafc;letter-spacing:.02em}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid #1e293b}
+.badge{font-size:.75rem;background:#1e293b;color:#94a3b8;padding:4px 10px;border-radius:20px}
+.ts{font-size:.75rem;color:#64748b;margin-top:4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+.card{background:#161b27;border:1px solid #1e293b;border-radius:10px;padding:16px}
+.card h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1e2030;font-size:.88rem}
+.row:last-child{border-bottom:none}
+.val{font-variant-numeric:tabular-nums;font-weight:600;color:#f1f5f9}
+.val.warn{color:#f59e0b}
+.val.err{color:#ef4444}
+.val.ok{color:#22c55e}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:6px}
+.dot.ok{background:#22c55e}
+.dot.warn{background:#f59e0b}
+.dot.err{background:#ef4444}
+.dot.off{background:#475569}
+.phase{display:inline-flex;align-items:center;gap:6px;background:#1e293b;padding:4px 12px;border-radius:6px;font-size:.82rem;color:#94a3b8}
+.phase strong{color:#f1f5f9}
+.action{padding:8px 0;border-bottom:1px solid #1e2030;font-size:.84rem}
+.action:last-child{border-bottom:none}
+.action .pri{display:inline-block;width:18px;height:18px;border-radius:50%;background:#334155;color:#94a3b8;text-align:center;font-size:.7rem;line-height:18px;margin-left:8px;flex-shrink:0}
+.action .act{color:#f1f5f9;margin-bottom:2px}
+.action .det{color:#64748b;font-size:.78rem}
+.window{background:#1e293b;border-radius:4px;padding:2px 8px;font-size:.78rem;color:#7dd3fc;display:inline-block;margin:2px 2px 2px 0}
+.upcoming-row{font-size:.82rem;padding:4px 0;color:#94a3b8}
+.upcoming-row strong{color:#e2e8f0}
+.loading{text-align:center;padding:40px;color:#475569;font-size:.9rem}
+#err{display:none;text-align:center;padding:12px;color:#ef4444;background:#1a0000;border-radius:8px;margin-bottom:16px;font-size:.85rem}
+</style>
+</head>
+<body>
+<div class="header">
+  <div>
+    <h1>RUMMAN Operations Cockpit</h1>
+    <div class="ts" id="ts">جاري التحميل…</div>
+  </div>
+  <span class="badge" id="phase-badge">—</span>
+</div>
+<div id="err"></div>
+<div id="main" class="loading">جاري جلب البيانات…</div>
+<script>
+function dot(val,warnAt,errAt){
+  if(val<0)return '<span class="dot off"></span>';
+  if(errAt!==null&&val>=errAt)return '<span class="dot err"></span>';
+  if(warnAt!==null&&val>=warnAt)return '<span class="dot warn"></span>';
+  return '<span class="dot ok"></span>';
+}
+function num(v,warnAt,errAt){
+  if(v===-1)return '<span class="val warn">?</span>';
+  let cls='val';
+  if(errAt!==null&&v>=errAt)cls='val err';
+  else if(warnAt!==null&&v>=warnAt)cls='val warn';
+  else cls='val ok';
+  return `<span class="${cls}">${v.toLocaleString()}</span>`;
+}
+function row(label,valHtml){
+  return `<div class="row"><span>${label}</span>${valHtml}</div>`;
+}
+function card(title,inner){
+  return `<div class="card"><h2>${title}</h2>${inner}</div>`;
+}
+function render(d){
+  const ac=d.academic,sv=d.services,kn=d.knowledge,qa=d.operational_qa,ra=d.recommended_actions;
+
+  // Phase badge
+  const phaseLabels={exam:'اختبارات',pre_exam:'قبيل الاختبار',registration:'تسجيل',
+    grade_release:'نتائج',break:'إجازة',regular:'منتظم'};
+  document.getElementById('phase-badge').textContent=phaseLabels[ac.phase]||ac.phase;
+  document.getElementById('ts').textContent='آخر تحديث: '+new Date(d.timestamp).toLocaleTimeString('ar');
+
+  // Academic
+  let acInner='';
+  if(ac.active_windows.length){
+    acInner+=`<div class="row"><span>النوافذ النشطة</span><span>${ac.active_windows.map(w=>`<span class="window">${w}</span>`).join('')}</span></div>`;
+  }
+  if(ac.upcoming.length){
+    ac.upcoming.forEach(u=>{
+      acInner+=`<div class="upcoming-row"><strong>${u.label_ar}</strong> — ${u.start_date} <span style="color:#7dd3fc">(${u.days_away} يوم)</span></div>`;
+    });
+  }
+  if(!acInner)acInner='<div class="row"><span>لا توجد أحداث قادمة</span><span class="val">—</span></div>';
+
+  // Services
+  const bf=sv.backfill;
+  let svInner='';
+  svInner+=row('Backfill — معلق',`${dot(bf.total_pending,1,null)}${num(bf.total_pending,1,null)}`);
+  svInner+=row('Backfill — يعمل',`${dot(bf.total_running,1,null)}${num(bf.total_running,1,null)}`);
+  svInner+=row('Backfill — فاشل',`${dot(bf.total_failed,1,5)}${num(bf.total_failed,1,5)}`);
+  svInner+=row('استخراج أسئلة — مكتمل',num(sv.question_extraction.total_completed,null,null));
+  svInner+=row('استخراج أسئلة — معلق',`${dot(sv.question_extraction.total_pending,1,20)}${num(sv.question_extraction.total_pending,1,20)}`);
+  svInner+=row('Embed — معلق',`${dot(sv.embed.total_pending,10,100)}${num(sv.embed.total_pending,10,100)}`);
+  svInner+=row('ذكاء اصطناعي — إجمالي',num(sv.intelligence.total,null,null));
+  svInner+=row('إشارات تيليغرام',num(sv.signals.total,null,null));
+  if(sv.signals.last_stored_at){
+    svInner+=row('آخر إشارة',`<span class="val" style="font-size:.78rem">${new Date(sv.signals.last_stored_at).toLocaleDateString('ar')}</span>`);
+  }
+  svInner+=row('وسائط — معلق',`${dot(sv.media.total_pending,1,10)}${num(sv.media.total_pending,1,10)}`);
+
+  // Knowledge
+  let knInner='';
+  knInner+=row('أسئلة اختبارات',num(kn.exam_questions,null,null));
+  knInner+=row('وثائق مصدرية',num(kn.source_documents,null,null));
+  knInner+=row('مقاطع المستندات',num(kn.document_chunks,null,null));
+  knInner+=row('موضوعات KG',num(kn.kg_topics,null,null));
+  knInner+=row('إشارات تيليغرام',num(kn.telegram_signals,null,null));
+
+  // QA
+  let qaInner='';
+  qaInner+=row('الإجمالي',num(qa.total,null,null));
+  qaInner+=row('نشط',num(qa.active,null,null));
+  qaInner+=row('مسودة',num(qa.draft,null,null));
+  qaInner+=row('يحتاج مراجعة',`${dot(qa.needs_review,1,null)}${num(qa.needs_review,1,null)}`);
+  qaInner+=row('يحتاج مراجعة رسمية',`${dot(qa.needs_official_review,1,null)}${num(qa.needs_official_review,1,null)}`);
+
+  // Actions
+  let raInner='';
+  if(ra.length===0){
+    raInner='<div class="action"><div class="act" style="color:#22c55e">كل شيء على ما يرام</div></div>';
+  }else{
+    ra.forEach(a=>{
+      raInner+=`<div class="action"><div class="act"><span class="pri">${a.priority}</span>${a.action}</div><div class="det">${a.detail}</div></div>`;
+    });
+  }
+
+  const html=`<div class="grid">
+    ${card('السياق الأكاديمي',acInner)}
+    ${card('حالة الخدمات',svInner)}
+    ${card('قاعدة المعرفة',knInner)}
+    ${card('الأسئلة التشغيلية',qaInner)}
+    ${card('الإجراءات المقترحة',raInner)}
+  </div>`;
+  document.getElementById('main').className='';
+  document.getElementById('main').innerHTML=html;
+}
+async function refresh(){
+  try{
+    const r=await fetch('/ops/status');
+    if(!r.ok)throw new Error('HTTP '+r.status);
+    const d=await r.json();
+    document.getElementById('err').style.display='none';
+    render(d);
+  }catch(e){
+    document.getElementById('err').style.display='block';
+    document.getElementById('err').textContent='تعذّر تحميل البيانات: '+e.message;
+  }
+}
+refresh();
+setInterval(refresh,30000);
+</script>
+</body>
+</html>"""
+    return HTMLResponse(content=html, status_code=200)

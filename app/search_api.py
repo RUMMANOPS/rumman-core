@@ -2118,16 +2118,36 @@ def _derive_strategic_risks(backfill_failed: int, qe_completed: int) -> list:
     return risks
 
 
+# ── Background messages count cache (avoids blocking response on slow COUNT) ──
+_msg_count_cache: dict = {"value": 0, "updated_at": 0.0}
+
+async def _refresh_messages_count(base: str) -> None:
+    """Background task: COUNT(*) on messages can take 10-30s; cache it."""
+    import time
+    try:
+        async with httpx.AsyncClient(timeout=60) as h:
+            n = await _safe_count(h, f"{base}/messages", {"select": "id"})
+            if n > 0:
+                _msg_count_cache["value"] = n
+                _msg_count_cache["updated_at"] = time.time()
+    except Exception:
+        pass
+
+
 @app.get("/ops/status")
 async def ops_status():
     """Operations status snapshot — all Supabase counts gathered in parallel."""
+    import time
     from datetime import datetime, timezone, timedelta
 
     base = f"{SUPABASE_URL}/rest/v1"
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
-    async with httpx.AsyncClient(timeout=10) as http, \
-               httpx.AsyncClient(timeout=25) as slow_http:
+    # Trigger background refresh of messages count if stale (> 5 min)
+    if time.time() - _msg_count_cache["updated_at"] > 300:
+        asyncio.create_task(_refresh_messages_count(base))
+
+    async with httpx.AsyncClient(timeout=10) as http:
 
         # ── All parallel queries ──────────────────────────────────────────────
         (
@@ -2146,7 +2166,6 @@ async def ops_status():
             recent_signals,
             course_rows,
             sync_state_rows,
-            messages_total_raw,
         ) = await asyncio.gather(
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.pending", "select": "id"}),
@@ -2194,9 +2213,6 @@ async def ops_status():
             # Channels + message totals from sync state (~65 rows, fast)
             _safe_json(http, f"{base}/telegram_sync_state",
                        {"select": "total_messages_seen"}),
-            # Real message count — runs in parallel with 25s timeout
-            # (falls back to sync_state sum if messages table COUNT is slow)
-            _safe_count(slow_http, f"{base}/messages", {"select": "id"}),
             return_exceptions=False,
         )
 
@@ -2204,8 +2220,8 @@ async def ops_status():
         _ss = sync_state_rows if isinstance(sync_state_rows, list) else []
         channels_total = len(_ss)
         _sync_sum = sum((r.get("total_messages_seen") or 0) for r in _ss)
-        # Prefer real count from messages table; fall back to sync_state sum
-        messages_total = messages_total_raw if messages_total_raw > 0 else _sync_sum
+        # Use cached real count (updated by background task); fall back to sync_state sum
+        messages_total = _msg_count_cache["value"] if _msg_count_cache["value"] > 0 else _sync_sum
 
         # ── telegram_signals (may not exist) ─────────────────────────────────
         signals_total = 0

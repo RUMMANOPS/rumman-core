@@ -876,8 +876,14 @@ def _build_context_block(
     course_profile: dict | None = None,
     exam_signals: list[dict] | None = None,
     msg_signals: list[dict] | None = None,
+    knowledge_gaps: list[str] | None = None,
 ) -> str | None:
-    """Format student context + corpus intelligence into a system-prompt injection block."""
+    """Format student context + corpus intelligence into a system-prompt injection block.
+
+    Combines three intelligence tiers (Tier 1 = course exam patterns,
+    Tier 2 = student failure history, Tier 3 = their intersection) into
+    a grounded context block injected before synthesis.
+    """
     parts: list[str] = []
 
     # Student signals
@@ -947,6 +953,44 @@ def _build_context_block(
             semester_tag = " (الفصل الحالي)" if sig.get("is_current_semester") else ""
             parts.append(f"{label}{semester_tag} ({src} رسالة): {content}")
 
+    # ── Academic Intelligence Layer — Tier 2 + Tier 3 ──────────────────────
+    # Tier 2: Student's unresolved searches — topics they asked about and got no answer.
+    # Tier 3: Intersection — when a failed topic is also historically exam-critical,
+    #   surface it explicitly so synthesis gives extra depth and examples.
+    # This is the moat: no other platform has both student failure history and
+    # the course's exam corpus to compute this intersection.
+    if knowledge_gaps:
+        # Collect exam hotspot topic names for intersection detection
+        hotspot_names: list[str] = []
+        for sig in (exam_signals or [])[:2]:
+            hotspot_names.extend(sig.get("top_topics") or [])
+
+        # Fuzzy intersection: a gap query overlaps a hotspot topic if either contains
+        # the other as a substring (case-insensitive). Simple but effective for
+        # Arabic/English academic terms where topic names appear verbatim in queries.
+        intersections: list[str] = []
+        for hotspot in hotspot_names:
+            h_lower = hotspot.lower()
+            for gap in knowledge_gaps:
+                if h_lower in gap.lower() or gap.lower() in h_lower:
+                    if hotspot not in intersections:
+                        intersections.append(hotspot)
+                    break
+
+        if intersections:
+            # Highest-value signal: struggling with exam-critical topic
+            parts.append(
+                f"تقاطع حرج — الطالب لم يجد إجابة عن مواضيع تتكرر في الاختبارات التاريخية: "
+                f"{', '.join(intersections[:4])} — اشرحها بعمق كامل مع أمثلة حتى لو لم يطلب ذلك."
+            )
+        elif knowledge_gaps:
+            # No intersection found but student still has recent failures — show them
+            recent_gaps = [g[:70] for g in knowledge_gaps[:3]]
+            parts.append(
+                f"الطالب بحث مؤخراً ولم يجد إجابة: «{' | '.join(recent_gaps)}» — "
+                f"إذا تعلق السؤال الحالي بهذه المواضيع فاشرحها بمزيد من التفصيل."
+            )
+
     if not parts:
         return None
     return "سياق المادة والطالب:\n" + "\n".join(parts)
@@ -977,6 +1021,106 @@ async def _fetch_message_signals(
         )
         if r.status_code == 200:
             return r.json()
+    except Exception:
+        pass
+    return []
+
+
+# ---------------------------------------------------------------------------
+# Academic Intelligence Layer — Tier 1: Live exam topic frequency
+# ---------------------------------------------------------------------------
+
+async def _fetch_live_exam_topics(
+    http: httpx.AsyncClient,
+    course_code: str,
+    exam_type: str | None = None,
+    limit: int = 8,
+) -> list[dict]:
+    """Query exam_questions directly via get_recurring_topics RPC.
+
+    Returns results in exam_intelligence row shape so _build_context_block()
+    consumes them identically to pre-computed rows from the exam_intelligence table.
+
+    This is the live fallback: works with 17,195 existing questions without
+    any pre-computation script. Gets richer as more exams are ingested.
+    """
+    try:
+        r = await http.post(
+            f"{SUPABASE_URL}/rest/v1/rpc/get_recurring_topics",
+            headers=HEADERS,
+            json={
+                "p_course_code": course_code,
+                "p_tenant_id":   SEU_TENANT_ID,
+                "p_exam_type":   exam_type,
+                "p_limit":       limit,
+            },
+            timeout=5,
+        )
+        if r.status_code != 200:
+            return []
+        rows = r.json() or []
+        if not rows:
+            return []
+
+        # Prefer topics that span multiple exam years — those are the real recurring signals.
+        # Fall back to single-year topics only if that's all we have.
+        multi_year = [row["topic_name"] for row in rows if (row.get("year_count") or 0) >= 2]
+        top_topics = multi_year or [row["topic_name"] for row in rows[:6]]
+
+        years_set: set[str] = set()
+        total_q = 0
+        for row in rows:
+            total_q += row.get("question_count") or 0
+            for y in (row.get("years") or []):
+                if y:
+                    years_set.add(str(y))
+
+        confidence = "high" if len(years_set) >= 3 else "medium" if years_set else "low"
+        return [{
+            "exam_type":     exam_type or "general",
+            "top_topics":    top_topics,
+            "source_count":  total_q,
+            "confidence":    confidence,
+            "years_covered": sorted(years_set),
+            "_live":         True,
+        }]
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Academic Intelligence Layer — Tier 2: Student knowledge gap history
+# ---------------------------------------------------------------------------
+
+async def _fetch_student_knowledge_gaps(
+    http: httpx.AsyncClient,
+    user_id: str,
+    course_code: str,
+    limit: int = 8,
+) -> list[str]:
+    """Return recent zero-result query texts for this student in this course.
+
+    These are queries the student explicitly typed and got no grounded answer for —
+    they represent real knowledge gaps that the corpus hasn't yet resolved.
+    Combined with exam hotspots, they form the intersection that no other platform
+    can compute: topic X is both YOUR blind spot AND historically exam-critical.
+    """
+    try:
+        r = await http.get(
+            f"{SUPABASE_URL}/rest/v1/learning_events",
+            headers=HEADERS,
+            params={
+                "user_id":       f"eq.{user_id}",
+                "grounded":      "eq.false",
+                "course_codes":  f"cs.{{{course_code}}}",
+                "select":        "query_raw,occurred_at",
+                "order":         "occurred_at.desc",
+                "limit":         str(limit),
+            },
+            timeout=4,
+        )
+        if r.status_code == 200:
+            return [row["query_raw"] for row in (r.json() or []) if row.get("query_raw")]
     except Exception:
         pass
     return []
@@ -1025,6 +1169,12 @@ async def _fetch_course_intelligence(
             signals = r_sig.json()
     except Exception:
         pass
+
+    # Live fallback: exam_intelligence is pre-computed and may not yet have been populated
+    # by scripts/extract_exam_signals.py. Fall back to querying exam_questions directly
+    # via get_recurring_topics RPC — always fresh, scales as more exams are ingested.
+    if not signals:
+        signals = await _fetch_live_exam_topics(http, course_code, exam_type)
 
     return profile, signals
 
@@ -1383,6 +1533,181 @@ async def course_inventory(req: CourseInventoryRequest):
 
 
 # ---------------------------------------------------------------------------
+# Academic Intelligence Layer — Public Course Intelligence Surface
+# ---------------------------------------------------------------------------
+
+@app.get("/v1/intelligence/course/{course_code}")
+async def course_intelligence_profile(
+    course_code: str,
+    user_id:     str | None = None,
+):
+    """
+    Academic intelligence profile for a single SEU course.
+
+    What no other platform can provide for SEU:
+    - Which exam topics appear consistently across multiple years (from 17,195 real questions)
+    - How those topics split across midterm vs final
+    - What concepts students are currently confused about (community signals)
+    - Coverage confidence (how many questions and years back the data goes)
+
+    If user_id is provided, also returns the student's personal knowledge state:
+    - Topics they searched for and couldn't find (knowledge gaps)
+    - The intersection: their gaps that are also historically exam-critical
+    """
+    course_code = course_code.upper().strip()
+
+    async with httpx.AsyncClient(timeout=12) as http:
+        # Fetch final + midterm topics, profile, signals, and student gaps in parallel
+        fetch_coros = [
+            _fetch_live_exam_topics(http, course_code, "final",   limit=12),
+            _fetch_live_exam_topics(http, course_code, "midterm", limit=10),
+            http.get(
+                f"{SUPABASE_URL}/rest/v1/course_intelligence_profiles",
+                headers=HEADERS,
+                params={
+                    "course_code": f"eq.{course_code}",
+                    "tenant_id":   f"eq.{SEU_TENANT_ID}",
+                    "limit": "1",
+                },
+                timeout=5,
+            ),
+            _fetch_message_signals(http, course_code),
+        ]
+        if user_id:
+            fetch_coros.append(_fetch_student_knowledge_gaps(http, user_id, course_code))
+
+        fetched = await asyncio.gather(*fetch_coros, return_exceptions=True)
+
+    final_sig   = fetched[0] if isinstance(fetched[0], list) else []
+    midterm_sig = fetched[1] if isinstance(fetched[1], list) else []
+    profile_r   = fetched[2]
+    msg_sigs    = fetched[3] if isinstance(fetched[3], list) else []
+    gaps_raw    = fetched[4] if user_id and isinstance(fetched[4], list) else []
+
+    final_data   = final_sig[0]   if final_sig   else {}
+    midterm_data = midterm_sig[0] if midterm_sig else {}
+
+    # Aggregate year coverage and question count across both exam types
+    all_years: set[str] = set()
+    total_questions = 0
+    for sig_data in [final_data, midterm_data]:
+        total_questions += sig_data.get("source_count") or 0
+        for y in sig_data.get("years_covered") or []:
+            all_years.add(str(y))
+
+    profile = None
+    if not isinstance(profile_r, Exception) and profile_r.status_code == 200:
+        rows = profile_r.json() or []
+        if rows:
+            profile = rows[0]
+
+    # Compute student knowledge state if user_id provided
+    student_state: dict | None = None
+    if user_id and gaps_raw:
+        hotspot_names = (final_data.get("top_topics") or []) + (midterm_data.get("top_topics") or [])
+        intersections = []
+        for hotspot in hotspot_names:
+            h_lower = hotspot.lower()
+            for gap in gaps_raw:
+                if h_lower in gap.lower() or gap.lower() in h_lower:
+                    if hotspot not in intersections:
+                        intersections.append(hotspot)
+                    break
+        student_state = {
+            "recent_unanswered_queries": gaps_raw[:6],
+            "critical_intersections":   intersections,
+            "has_critical_gaps":        len(intersections) > 0,
+        }
+
+    # Overall confidence in the intelligence (how deep and wide is the data)
+    confidence = (
+        "high"   if len(all_years) >= 3 and total_questions >= 50 else
+        "medium" if all_years and total_questions >= 10             else
+        "low"
+    )
+
+    return {
+        "course_code":           course_code,
+        "intelligence_confidence": confidence,
+        "years_covered":         sorted(all_years),
+        "total_questions_indexed": total_questions,
+        "exam_hotspots": {
+            "final":   final_data.get("top_topics") or [],
+            "midterm": midterm_data.get("top_topics") or [],
+        },
+        "exam_metadata": {
+            "final_question_count":   final_data.get("source_count") or 0,
+            "midterm_question_count": midterm_data.get("source_count") or 0,
+        },
+        "corpus_profile":  profile,
+        "community_signals": [
+            {
+                "type":           s.get("signal_type"),
+                "content":        s.get("signal_content"),
+                "source_count":   s.get("source_count"),
+                "current_semester": s.get("is_current_semester"),
+            }
+            for s in msg_sigs[:5]
+        ],
+        "student_knowledge_state": student_state,
+    }
+
+
+@app.get("/v1/intelligence/student/{user_id}/gaps")
+async def student_knowledge_gaps(
+    user_id:     str,
+    course_code: str | None = None,
+):
+    """
+    Student's unresolved searches — the raw material for personalized study guidance.
+
+    Returns recent queries where the student got no grounded answer.
+    Optionally scoped to a single course.
+
+    This powers the future 'Study Plan' feature: RUMMAN knows what you searched for
+    and couldn't find, and can cross-reference it with exam frequency data to
+    tell you exactly where to focus your study time.
+    """
+    async with httpx.AsyncClient(timeout=8) as http:
+        try:
+            params: dict = {
+                "user_id":  f"eq.{user_id}",
+                "grounded": "eq.false",
+                "select":   "query_raw,course_codes,occurred_at",
+                "order":    "occurred_at.desc",
+                "limit":    "20",
+            }
+            if course_code:
+                params["course_codes"] = f"cs.{{{course_code.upper()}}}"
+            r = await http.get(
+                f"{SUPABASE_URL}/rest/v1/learning_events",
+                headers=HEADERS,
+                params=params,
+                timeout=6,
+            )
+            if r.status_code != 200:
+                return {"user_id": user_id, "gaps": []}
+
+            rows = r.json() or []
+            gaps = [
+                {
+                    "query":        row["query_raw"],
+                    "courses":      row.get("course_codes") or [],
+                    "occurred_at":  row.get("occurred_at"),
+                }
+                for row in rows if row.get("query_raw")
+            ]
+            return {
+                "user_id":    user_id,
+                "gap_count":  len(gaps),
+                "gaps":       gaps,
+                "note":       "هذه المواضيع بحث عنها الطالب ولم تُغطَّ بالكامل — قاعدة بيانات للمساعدة في تحديد أولويات الدراسة.",
+            }
+        except Exception:
+            return {"user_id": user_id, "gaps": []}
+
+
+# ---------------------------------------------------------------------------
 # Exam Bank — Domino 1
 # ---------------------------------------------------------------------------
 
@@ -1642,6 +1967,13 @@ async def synthesize(req: SynthesizeRequest):
             ))
             fetch_keys.append("msg_signals")
 
+        # Academic Intelligence Tier 2: student's unresolved searches for this course.
+        # Only meaningful when both user and course are known — skipped for anonymous queries.
+        knowledge_gaps: list[str] = []
+        if req.user_id and primary_course:
+            fetches.append(_fetch_student_knowledge_gaps(ctx_http, req.user_id, primary_course))
+            fetch_keys.append("knowledge_gaps")
+
         if fetches:
             results_ctx = await asyncio.gather(*fetches, return_exceptions=True)
             for key, result in zip(fetch_keys, results_ctx):
@@ -1653,8 +1985,12 @@ async def synthesize(req: SynthesizeRequest):
                     course_profile, exam_signals = result
                 elif key == "msg_signals":
                     msg_signals = result
+                elif key == "knowledge_gaps":
+                    knowledge_gaps = result or []
 
-    student_context_block = _build_context_block(ctx, course_profile, exam_signals, msg_signals)
+    student_context_block = _build_context_block(
+        ctx, course_profile, exam_signals, msg_signals, knowledge_gaps
+    )
 
     # Select model based on intent complexity — comparison/low-confidence get gpt-4o,
     # all other factual/exam queries get gpt-4o-mini (~75% cheaper).

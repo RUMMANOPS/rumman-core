@@ -2126,7 +2126,8 @@ async def ops_status():
     base = f"{SUPABASE_URL}/rest/v1"
     week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
-    async with httpx.AsyncClient(timeout=10) as http:
+    async with httpx.AsyncClient(timeout=10) as http, \
+               httpx.AsyncClient(timeout=25) as slow_http:
 
         # ── All parallel queries ──────────────────────────────────────────────
         (
@@ -2145,6 +2146,7 @@ async def ops_status():
             recent_signals,
             course_rows,
             sync_state_rows,
+            messages_total_raw,
         ) = await asyncio.gather(
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.pending", "select": "id"}),
@@ -2189,17 +2191,21 @@ async def ops_status():
                 "select": "code,name_ar,name_en",
                 "limit":  "500",
             }),
-            # Channels + message totals: sum total_messages_seen across ~65 rows
-            # (avoids slow COUNT(*) on the 2M+ row messages table)
+            # Channels + message totals from sync state (~65 rows, fast)
             _safe_json(http, f"{base}/telegram_sync_state",
                        {"select": "total_messages_seen"}),
+            # Real message count — runs in parallel with 25s timeout
+            # (falls back to sync_state sum if messages table COUNT is slow)
+            _safe_count(slow_http, f"{base}/messages", {"select": "id"}),
             return_exceptions=False,
         )
 
-        # ── Messages + channels from sync state ──────────────────────────────
+        # ── Messages + channels ───────────────────────────────────────────────
         _ss = sync_state_rows if isinstance(sync_state_rows, list) else []
-        messages_total = sum((r.get("total_messages_seen") or 0) for r in _ss)
         channels_total = len(_ss)
+        _sync_sum = sum((r.get("total_messages_seen") or 0) for r in _ss)
+        # Prefer real count from messages table; fall back to sync_state sum
+        messages_total = messages_total_raw if messages_total_raw > 0 else _sync_sum
 
         # ── telegram_signals (may not exist) ─────────────────────────────────
         signals_total = 0

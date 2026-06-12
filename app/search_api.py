@@ -1908,12 +1908,46 @@ def _build_recommended_actions(
     return actions[:5]
 
 
+# ── College-coverage helpers (module-level to avoid re-creation per request) ──
+
+_COLLEGE_PREFIX: dict[str, tuple[str, str]] = {
+    "IT": ("COMP", "حوسبة"), "IS": ("COMP", "حوسبة"),
+    "CS": ("COMP", "حوسبة"), "CIS": ("COMP", "حوسبة"),
+    "MGT": ("ADMIN", "إدارة أعمال"), "ACC": ("ADMIN", "إدارة أعمال"),
+    "FIN": ("ADMIN", "إدارة أعمال"), "MKT": ("ADMIN", "إدارة أعمال"),
+    "HRM": ("ADMIN", "إدارة أعمال"), "BUS": ("ADMIN", "إدارة أعمال"),
+    "LAW": ("LAW", "حقوق"), "LAG": ("LAW", "حقوق"),
+    "HLTH": ("HLTH", "علوم صحية"), "NUR": ("HLTH", "علوم صحية"),
+    "HSA": ("HLTH", "علوم صحية"), "PHR": ("HLTH", "علوم صحية"),
+    "ENGT": ("ENGT", "هندسة"),
+    "ENG": ("GEN", "مشترك"), "ISLM": ("GEN", "مشترك"),
+    "ARB": ("GEN", "مشترك"), "STAT": ("GEN", "مشترك"),
+    "MATH": ("GEN", "مشترك"), "GEN": ("GEN", "مشترك"),
+}
+COLLEGE_ORDER = ["COMP", "ADMIN", "LAW", "HLTH", "ENGT", "GEN"]
+_COLLEGE_LABELS = {
+    "COMP": "حوسبة", "ADMIN": "إدارة أعمال", "LAW": "حقوق",
+    "HLTH": "علوم صحية", "ENGT": "هندسة", "GEN": "مشترك",
+}
+
+
+def _code_to_college(code: str):
+    """Map a course code to its (college_key, name_ar) tuple, or None."""
+    if not code or code == "UNKNOWN":
+        return None
+    for prefix in sorted(_COLLEGE_PREFIX.keys(), key=len, reverse=True):
+        if code.startswith(prefix):
+            return _COLLEGE_PREFIX[prefix]
+    return None
+
+
 @app.get("/ops/status")
 async def ops_status():
     """Operations status snapshot — all Supabase counts gathered in parallel."""
-    from datetime import datetime, timezone
+    from datetime import datetime, timezone, timedelta
 
     base = f"{SUPABASE_URL}/rest/v1"
+    week_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
 
     async with httpx.AsyncClient(timeout=10) as http:
 
@@ -1930,13 +1964,17 @@ async def ops_status():
             doc_chunks_total,
             kg_topics_total,
             cal_events,
+            coverage_rows,
+            recent_signals,
         ) = await asyncio.gather(
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.pending", "select": "id"}),
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.running", "select": "id"}),
             _safe_count(http, f"{base}/telegram_backfill_jobs",
-                        {"status": "eq.failed", "select": "id"}),
+                        {"status": "eq.failed",
+                         "error_message": "not.like.PERMANENTLY_SKIPPED*",
+                         "select": "id"}),
             _safe_count(http, f"{base}/source_documents",
                         {"question_extraction_status": "eq.pending", "select": "id"}),
             _safe_count(http, f"{base}/source_documents",
@@ -1955,6 +1993,17 @@ async def ops_status():
                 "tenant_id": f"eq.{SEU_TENANT_ID}",
                 "select":    "event_type,event_name_ar,start_date,end_date",
                 "order":     "start_date.asc",
+            }),
+            # Exam bank coverage (for college breakdown)
+            _safe_json(http, f"{base}/exam_bank_coverage", {
+                "select": "course_code,coverage_score,is_exam_bank_ready",
+                "limit":  "500",
+            }),
+            # Recent signals (for student pulse — last 7 days)
+            _safe_json(http, f"{base}/telegram_signals", {
+                "select":     "course_code,signal_type",
+                "created_at": f"gte.{week_ago}",
+                "limit":      "1000",
             }),
             return_exceptions=False,
         )
@@ -2004,6 +2053,39 @@ async def ops_status():
                 qa_total = qa_active = qa_draft = qa_needs_review = qa_needs_official = 0
         except Exception:
             pass
+
+    # ── College coverage ─────────────────────────────────────────────────────
+    college_buckets: dict[str, list] = {k: [] for k in COLLEGE_ORDER}
+    for row in (coverage_rows if isinstance(coverage_rows, list) else []):
+        result = _code_to_college(row.get("course_code", ""))
+        if result:
+            college_buckets[result[0]].append(row)
+
+    college_coverage = []
+    for col_key in COLLEGE_ORDER:
+        courses = college_buckets[col_key]
+        total = len(courses)
+        ready = sum(1 for c in courses if c.get("is_exam_bank_ready"))
+        pct = round(ready / total * 100) if total > 0 else 0
+        college_coverage.append({
+            "key":      col_key,
+            "name_ar":  _COLLEGE_LABELS[col_key],
+            "pct":      pct,
+            "ready":    ready,
+            "total":    total,
+            "has_data": total > 0,
+        })
+
+    # ── Student pulse (signals last 7 days) ──────────────────────────────────
+    import collections as _collections
+    course_counter = _collections.Counter(
+        s.get("course_code") for s in (recent_signals if isinstance(recent_signals, list) else [])
+        if s.get("course_code")
+    )
+    student_pulse = [
+        {"course_code": cc, "signal_count": cnt}
+        for cc, cnt in course_counter.most_common(5)
+    ]
 
     # ── Academic phase ────────────────────────────────────────────────────────
     academic = _compute_academic_phase(cal_events if isinstance(cal_events, list) else [])
@@ -2063,6 +2145,8 @@ async def ops_status():
             "needs_official_review":  max(qa_needs_official, 0) if qa_needs_official >= 0 else -1,
         },
         "recommended_actions": actions,
+        "college_coverage": college_coverage,
+        "student_pulse": student_pulse,
     }
 
 
@@ -2075,146 +2159,225 @@ async def ops_cockpit():
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>RUMMAN Operations Cockpit</title>
+<title>RUMMAN Ops</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;padding:16px}
-h1{font-size:1.3rem;font-weight:700;color:#f8fafc;letter-spacing:.02em}
-.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:12px;border-bottom:1px solid #1e293b}
-.badge{font-size:.75rem;background:#1e293b;color:#94a3b8;padding:4px 10px;border-radius:20px}
-.ts{font-size:.75rem;color:#64748b;margin-top:4px}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:14px}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;min-height:100vh;padding:16px 20px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid #1e293b}
+.header-right{display:flex;align-items:center;gap:10px}
+h1{font-size:1.25rem;font-weight:700;color:#f8fafc;letter-spacing:.02em}
+.phase-badge{font-size:.75rem;padding:3px 10px;border-radius:12px;font-weight:600}
+.header-left{text-align:left;display:flex;align-items:center;gap:8px}
+.health-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
+.ts{font-size:.75rem;color:#64748b}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+.grid1{margin-bottom:14px}
+@media(max-width:640px){.grid2{grid-template-columns:1fr}}
 .card{background:#161b27;border:1px solid #1e293b;border-radius:10px;padding:16px}
-.card h2{font-size:.85rem;text-transform:uppercase;letter-spacing:.08em;color:#64748b;margin-bottom:12px}
-.row{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-bottom:1px solid #1e2030;font-size:.88rem}
-.row:last-child{border-bottom:none}
-.val{font-variant-numeric:tabular-nums;font-weight:600;color:#f1f5f9}
-.val.warn{color:#f59e0b}
-.val.err{color:#ef4444}
-.val.ok{color:#22c55e}
-.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-left:6px}
-.dot.ok{background:#22c55e}
-.dot.warn{background:#f59e0b}
-.dot.err{background:#ef4444}
-.dot.off{background:#475569}
-.phase{display:inline-flex;align-items:center;gap:6px;background:#1e293b;padding:4px 12px;border-radius:6px;font-size:.82rem;color:#94a3b8}
-.phase strong{color:#f1f5f9}
-.action{padding:8px 0;border-bottom:1px solid #1e2030;font-size:.84rem}
-.action:last-child{border-bottom:none}
-.action .pri{display:inline-block;width:18px;height:18px;border-radius:50%;background:#334155;color:#94a3b8;text-align:center;font-size:.7rem;line-height:18px;margin-left:8px;flex-shrink:0}
-.action .act{color:#f1f5f9;margin-bottom:2px}
-.action .det{color:#64748b;font-size:.78rem}
-.window{background:#1e293b;border-radius:4px;padding:2px 8px;font-size:.78rem;color:#7dd3fc;display:inline-block;margin:2px 2px 2px 0}
-.upcoming-row{font-size:.82rem;padding:4px 0;color:#94a3b8}
-.upcoming-row strong{color:#e2e8f0}
-.loading{text-align:center;padding:40px;color:#475569;font-size:.9rem}
-#err{display:none;text-align:center;padding:12px;color:#ef4444;background:#1a0000;border-radius:8px;margin-bottom:16px;font-size:.85rem}
+.card-title{font-size:.8rem;font-weight:600;letter-spacing:.06em;color:#64748b;text-transform:uppercase;margin-bottom:12px}
+.pulse-row{display:flex;align-items:center;justify-content:space-between;padding:6px 0;border-bottom:1px solid #1e2030;font-size:.88rem}
+.pulse-row:last-child{border-bottom:none}
+.pulse-dots{display:flex;gap:3px;flex-wrap:wrap}
+.pdot{width:8px;height:8px;border-radius:50%;background:#3b82f6;flex-shrink:0}
+.pulse-count{font-size:.8rem;color:#64748b;min-width:32px;text-align:left}
+.cov-row{padding:7px 0;border-bottom:1px solid #1e2030}
+.cov-row:last-child{border-bottom:none}
+.cov-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;font-size:.86rem}
+.cov-pct{font-weight:600;font-size:.82rem}
+.bar-bg{background:#1e293b;border-radius:4px;height:6px;overflow:hidden}
+.bar-fill{height:6px;border-radius:4px;transition:width .4s}
+.bar-green{background:#22c55e}
+.bar-orange{background:#f59e0b}
+.bar-red{background:#ef4444}
+.cov-note{font-size:.72rem;color:#64748b;margin-top:3px}
+.actions-list{list-style:none}
+.action-item{display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #1e2030;font-size:.86rem}
+.action-item:last-child{border-bottom:none}
+.action-num{min-width:22px;height:22px;border-radius:50%;background:#1e3a5f;color:#7dd3fc;text-align:center;line-height:22px;font-size:.72rem;font-weight:700;flex-shrink:0}
+.action-text{color:#f1f5f9;margin-bottom:2px}
+.action-detail{font-size:.76rem;color:#64748b}
+.qa-nums{display:flex;gap:16px;flex-wrap:wrap;padding:4px 0}
+.qa-num-item{display:flex;flex-direction:column;align-items:center;gap:2px}
+.qa-num-val{font-size:1.5rem;font-weight:700;line-height:1}
+.qa-num-lbl{font-size:.72rem;color:#64748b}
+.qa-warn{margin-top:10px;background:#1a1200;border:1px solid #f59e0b44;border-radius:6px;padding:8px 12px;font-size:.82rem;color:#f59e0b}
+.tech-toggle{width:100%;text-align:center;padding:10px;background:#161b27;border:1px solid #1e293b;border-radius:8px;color:#64748b;font-size:.8rem;cursor:pointer;margin-bottom:6px}
+.tech-toggle:hover{color:#94a3b8}
+.tech-table{width:100%;border-collapse:collapse;font-size:.82rem}
+.tech-table td{padding:5px 8px;border-bottom:1px solid #1e2030;color:#94a3b8}
+.tech-table td:last-child{text-align:left;font-weight:600;color:#e2e8f0;font-variant-numeric:tabular-nums}
+.tech-table tr:last-child td{border-bottom:none}
+#tech-section{display:none}
+.empty-note{color:#64748b;font-size:.84rem;padding:8px 0}
+.upcoming-chip{display:inline-block;font-size:.75rem;background:#1e3a5f;color:#7dd3fc;padding:2px 8px;border-radius:10px;margin-right:6px}
+#err{display:none;padding:10px 14px;color:#ef4444;background:#1a0000;border-radius:8px;margin-bottom:14px;font-size:.83rem}
 </style>
 </head>
 <body>
 <div class="header">
-  <div>
-    <h1>RUMMAN Operations Cockpit</h1>
-    <div class="ts" id="ts">جاري التحميل…</div>
+  <div class="header-right">
+    <h1>RUMMAN</h1>
+    <span class="phase-badge" id="phase-badge" style="background:#1e293b;color:#94a3b8">—</span>
+    <span id="upcoming-chip"></span>
   </div>
-  <span class="badge" id="phase-badge">—</span>
+  <div class="header-left">
+    <div class="health-dot" id="health-dot" style="background:#475569"></div>
+    <span class="ts" id="ts">جاري التحميل…</span>
+  </div>
 </div>
 <div id="err"></div>
-<div id="main" class="loading">جاري جلب البيانات…</div>
+<div id="main">
+  <div style="text-align:center;padding:40px;color:#475569;font-size:.9rem">جاري جلب البيانات…</div>
+</div>
 <script>
-function dot(val,warnAt,errAt){
-  if(val<0)return '<span class="dot off"></span>';
-  if(errAt!==null&&val>=errAt)return '<span class="dot err"></span>';
-  if(warnAt!==null&&val>=warnAt)return '<span class="dot warn"></span>';
-  return '<span class="dot ok"></span>';
-}
-function num(v,warnAt,errAt){
-  if(v===-1)return '<span class="val warn">?</span>';
-  let cls='val';
-  if(errAt!==null&&v>=errAt)cls='val err';
-  else if(warnAt!==null&&v>=warnAt)cls='val warn';
-  else cls='val ok';
-  return `<span class="${cls}">${v.toLocaleString()}</span>`;
-}
-function row(label,valHtml){
-  return `<div class="row"><span>${label}</span>${valHtml}</div>`;
-}
-function card(title,inner){
-  return `<div class="card"><h2>${title}</h2>${inner}</div>`;
-}
+const PHASE_LABELS={
+  exam:'الاختبارات النهائية',
+  pre_exam:'ما قبل الاختبارات',
+  registration:'فترة التسجيل',
+  grade_release:'نتائج وتظلمات',
+  break:'إجازة',
+  regular:'دراسة عادية'
+};
+const PHASE_COLORS={
+  exam:'#ef4444',pre_exam:'#f59e0b',registration:'#3b82f6',
+  grade_release:'#a78bfa',break:'#64748b',regular:'#22c55e'
+};
+
 function render(d){
-  const ac=d.academic,sv=d.services,kn=d.knowledge,qa=d.operational_qa,ra=d.recommended_actions;
-
-  // Phase badge
-  const phaseLabels={exam:'اختبارات',pre_exam:'قبيل الاختبار',registration:'تسجيل',
-    grade_release:'نتائج',break:'إجازة',regular:'منتظم'};
-  document.getElementById('phase-badge').textContent=phaseLabels[ac.phase]||ac.phase;
-  document.getElementById('ts').textContent='آخر تحديث: '+new Date(d.timestamp).toLocaleTimeString('ar');
-
-  // Academic
-  let acInner='';
-  if(ac.active_windows.length){
-    acInner+=`<div class="row"><span>النوافذ النشطة</span><span>${ac.active_windows.map(w=>`<span class="window">${w}</span>`).join('')}</span></div>`;
-  }
-  if(ac.upcoming.length){
-    ac.upcoming.forEach(u=>{
-      acInner+=`<div class="upcoming-row"><strong>${u.label_ar}</strong> — ${u.start_date} <span style="color:#7dd3fc">(${u.days_away} يوم)</span></div>`;
-    });
-  }
-  if(!acInner)acInner='<div class="row"><span>لا توجد أحداث قادمة</span><span class="val">—</span></div>';
-
-  // Services
+  const ac=d.academic,sv=d.services,kn=d.knowledge,qa=d.operational_qa,
+        ra=d.recommended_actions||[],
+        sp=d.student_pulse||[],
+        cc=d.college_coverage||[];
   const bf=sv.backfill;
-  let svInner='';
-  svInner+=row('Backfill — معلق',`${dot(bf.total_pending,1,null)}${num(bf.total_pending,1,null)}`);
-  svInner+=row('Backfill — يعمل',`${dot(bf.total_running,1,null)}${num(bf.total_running,1,null)}`);
-  svInner+=row('Backfill — فاشل',`${dot(bf.total_failed,1,5)}${num(bf.total_failed,1,5)}`);
-  svInner+=row('استخراج أسئلة — مكتمل',num(sv.question_extraction.total_completed,null,null));
-  svInner+=row('استخراج أسئلة — معلق',`${dot(sv.question_extraction.total_pending,1,20)}${num(sv.question_extraction.total_pending,1,20)}`);
-  svInner+=row('Embed — معلق',`${dot(sv.embed.total_pending,10,100)}${num(sv.embed.total_pending,10,100)}`);
-  svInner+=row('ذكاء اصطناعي — إجمالي',num(sv.intelligence.total,null,null));
-  svInner+=row('إشارات تيليغرام',num(sv.signals.total,null,null));
-  if(sv.signals.last_stored_at){
-    svInner+=row('آخر إشارة',`<span class="val" style="font-size:.78rem">${new Date(sv.signals.last_stored_at).toLocaleDateString('ar')}</span>`);
-  }
-  svInner+=row('وسائط — معلق',`${dot(sv.media.total_pending,1,10)}${num(sv.media.total_pending,1,10)}`);
 
-  // Knowledge
-  let knInner='';
-  knInner+=row('أسئلة اختبارات',num(kn.exam_questions,null,null));
-  knInner+=row('وثائق مصدرية',num(kn.source_documents,null,null));
-  knInner+=row('مقاطع المستندات',num(kn.document_chunks,null,null));
-  knInner+=row('موضوعات KG',num(kn.kg_topics,null,null));
-  knInner+=row('إشارات تيليغرام',num(kn.telegram_signals,null,null));
+  // Header
+  const phaseLbl=PHASE_LABELS[ac.phase]||ac.phase;
+  const phaseCol=PHASE_COLORS[ac.phase]||'#64748b';
+  const badge=document.getElementById('phase-badge');
+  badge.textContent=phaseLbl;
+  badge.style.background=phaseCol+'22';
+  badge.style.color=phaseCol;
 
-  // QA
-  let qaInner='';
-  qaInner+=row('الإجمالي',num(qa.total,null,null));
-  qaInner+=row('نشط',num(qa.active,null,null));
-  qaInner+=row('مسودة',num(qa.draft,null,null));
-  qaInner+=row('يحتاج مراجعة',`${dot(qa.needs_review,1,null)}${num(qa.needs_review,1,null)}`);
-  qaInner+=row('يحتاج مراجعة رسمية',`${dot(qa.needs_official_review,1,null)}${num(qa.needs_official_review,1,null)}`);
+  const ts=new Date(d.timestamp).toLocaleTimeString('ar-SA',{hour:'2-digit',minute:'2-digit'});
+  document.getElementById('ts').textContent='آخر تحديث '+ts;
 
-  // Actions
-  let raInner='';
-  if(ra.length===0){
-    raInner='<div class="action"><div class="act" style="color:#22c55e">كل شيء على ما يرام</div></div>';
+  const failed=bf.total_failed;
+  const hdot=document.getElementById('health-dot');
+  hdot.style.background=failed>5?'#ef4444':failed>0?'#f59e0b':'#22c55e';
+  hdot.title='backfill failed: '+failed;
+
+  // Upcoming chip
+  const chip=document.getElementById('upcoming-chip');
+  if(ac.upcoming&&ac.upcoming.length){
+    const u=ac.upcoming[0];
+    chip.innerHTML=`<span class="upcoming-chip">${u.label_ar} — ${u.days_away} يوم</span>`;
+  }else{chip.innerHTML='';}
+
+  // Panel 1: Student Pulse
+  let pulseHtml='';
+  if(sp.length===0){
+    pulseHtml='<div class="empty-note">لا إشارات حديثة — الـ pilot يغطي 4 مقررات</div>';
   }else{
-    ra.forEach(a=>{
-      raInner+=`<div class="action"><div class="act"><span class="pri">${a.priority}</span>${a.action}</div><div class="det">${a.detail}</div></div>`;
+    sp.forEach(s=>{
+      const dots=Math.min(10,Math.ceil(s.signal_count/10));
+      let dhtml='';
+      for(let i=0;i<dots;i++)dhtml+='<div class="pdot"></div>';
+      pulseHtml+=`<div class="pulse-row">
+        <span style="font-weight:600">${s.course_code}</span>
+        <div style="display:flex;align-items:center;gap:8px">
+          <div class="pulse-dots">${dhtml}</div>
+          <span class="pulse-count">${s.signal_count}</span>
+        </div>
+      </div>`;
     });
   }
 
-  const html=`<div class="grid">
-    ${card('السياق الأكاديمي',acInner)}
-    ${card('حالة الخدمات',svInner)}
-    ${card('قاعدة المعرفة',knInner)}
-    ${card('الأسئلة التشغيلية',qaInner)}
-    ${card('الإجراءات المقترحة',raInner)}
-  </div>`;
-  document.getElementById('main').className='';
-  document.getElementById('main').innerHTML=html;
+  // Panel 2: College Coverage
+  let covHtml='';
+  cc.forEach(c=>{
+    const barCls=c.pct>=80?'bar-green':c.pct>=50?'bar-orange':'bar-red';
+    const note=c.pct===0?'لا توجد أسئلة بعد':c.pct<50?'⚠ تغطية منخفضة':'';
+    const pctLabel=c.has_data?(c.pct+'%'):'—';
+    covHtml+=`<div class="cov-row">
+      <div class="cov-header">
+        <span>${c.name_ar}</span>
+        <span class="cov-pct" style="color:${c.pct>=80?'#22c55e':c.pct>=50?'#f59e0b':'#ef4444'}">${pctLabel}</span>
+      </div>
+      <div class="bar-bg"><div class="bar-fill ${barCls}" style="width:${c.pct}%"></div></div>
+      ${note?`<div class="cov-note">${note}</div>`:''}
+    </div>`;
+  });
+  if(!covHtml)covHtml='<div class="empty-note">لا توجد بيانات تغطية بعد</div>';
+
+  // Panel 3: Priorities
+  let priHtml='';
+  if(ra.length===0){
+    priHtml='<div class="action-item"><span style="color:#22c55e;font-size:.9rem">✓ لا إجراءات مطلوبة</span></div>';
+  }else{
+    ra.slice(0,3).forEach(a=>{
+      priHtml+=`<li class="action-item">
+        <div class="action-num">${a.priority}</div>
+        <div><div class="action-text">${a.action}</div><div class="action-detail">${a.detail}</div></div>
+      </li>`;
+    });
+  }
+
+  // Panel 4: QA Guide
+  const qaTot=qa.total>=0?qa.total:'?';
+  const qaAct=qa.active>=0?qa.active:'?';
+  const qaNor=qa.needs_official_review>=0?qa.needs_official_review:'?';
+  let qaWarn='';
+  if(qa.active===0){
+    qaWarn='<div class="qa-warn">لا توجد إجابات جاهزة للطلاب بعد</div>';
+  }
+  const qaHtml=`<div class="qa-nums">
+    <div class="qa-num-item"><div class="qa-num-val" style="color:#e2e8f0">${qaTot}</div><div class="qa-num-lbl">إجمالي</div></div>
+    <div class="qa-num-item"><div class="qa-num-val" style="color:#22c55e">${qaAct}</div><div class="qa-num-lbl">جاهزة للطلاب</div></div>
+    <div class="qa-num-item"><div class="qa-num-val" style="color:#f59e0b">${qaNor}</div><div class="qa-num-lbl">تحتاج مراجعة رسمية</div></div>
+  </div>${qaWarn}`;
+
+  // Technical details
+  const techHtml=`<table class="tech-table">
+    <tr><td>أرشيف الاختبارات</td><td>${kn.exam_questions>=0?kn.exam_questions.toLocaleString():'?'} سؤال</td></tr>
+    <tr><td>مقاطع المستندات</td><td>${kn.document_chunks>=0?kn.document_chunks.toLocaleString():'?'}</td></tr>
+    <tr><td>مصادر رسمية</td><td>${kn.source_documents>=0?kn.source_documents.toLocaleString():'?'}</td></tr>
+    <tr><td>مواضيع مُفهرسة</td><td>${kn.kg_topics>=0?kn.kg_topics.toLocaleString():'?'}</td></tr>
+    <tr><td>الإشارات الكلية</td><td>${kn.telegram_signals.toLocaleString()}</td></tr>
+    <tr><td>Backfill (pending / running / failed)</td><td>${bf.total_pending} / ${bf.total_running} / ${bf.total_failed}</td></tr>
+    <tr><td>Embed pending</td><td>${sv.embed.total_pending>=0?sv.embed.total_pending:'?'}</td></tr>
+    <tr><td>Question extraction (done / pending)</td><td>${sv.question_extraction.total_completed} / ${sv.question_extraction.total_pending}</td></tr>
+    <tr><td>Media pending</td><td>${sv.media.total_pending>=0?sv.media.total_pending:'?'}</td></tr>
+  </table>`;
+
+  document.getElementById('main').innerHTML=`
+    <div class="grid2">
+      <div class="card">
+        <div class="card-title">نبض الطلاب هذا الأسبوع</div>
+        ${pulseHtml}
+      </div>
+      <div class="card">
+        <div class="card-title">تغطية أرشيف الاختبارات</div>
+        ${covHtml}
+      </div>
+    </div>
+    <div class="grid1">
+      <div class="card">
+        <div class="card-title">أولوياتك اليوم</div>
+        <ul class="actions-list">${priHtml}</ul>
+      </div>
+    </div>
+    <div class="grid1">
+      <div class="card">
+        <div class="card-title">دليل الإجابات الآنية</div>
+        ${qaHtml}
+      </div>
+    </div>
+    <button class="tech-toggle" onclick="document.getElementById('tech-section').style.display=document.getElementById('tech-section').style.display==='none'?'block':'none';this.textContent=this.textContent.startsWith('▼')?'▲ إخفاء التفاصيل التقنية':'▼ التفاصيل التقنية'">▼ التفاصيل التقنية</button>
+    <div id="tech-section" style="display:none">
+      <div class="card">${techHtml}</div>
+    </div>`;
 }
+
 async function refresh(){
   try{
     const r=await fetch('/ops/status');

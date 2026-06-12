@@ -30,6 +30,7 @@ OpenAI classifies intent and synthesizes answers. Corpus is sole source of truth
 """
 
 import os
+import re
 import sys
 import time
 import hashlib
@@ -76,6 +77,14 @@ MIN_SIMILARITY_COURSE = 0.25  # course-filtered — scope already constrained
 
 SEU_TENANT_ID       = "00000000-0000-0000-0000-000000000001"
 SESSION_TTL_SECONDS = 30 * 60
+
+# Regex fallback for SEU course codes — used when the intent classifier fails or
+# returns empty course_codes for short queries like "MGT311" or "IT362".
+# Pattern: 2–4 Latin letters + 3–4 digits  (IT353, MGT401, ACCT101)
+#       OR 2–4 Arabic letters + 3–4 digits  (قنن427, حسب123)
+_COURSE_CODE_RE = re.compile(
+    r'\b([A-Za-z]{2,4}\d{3,4}|[؀-ۿ]{2,4}\d{3,4})\b'
+)
 
 _MSG_SIGNAL_LABELS: dict[str, str] = {
     "exam_emphasis":     "تأكيدات الاختبار من الطلاب",
@@ -788,6 +797,17 @@ async def _log_event(
     """Write one learning_events row. Never raises — must not block responses."""
     try:
         intent = understanding.intent if understanding else None
+
+        # Primary source: intent classifier output (LLM-extracted, highest quality).
+        # Fallback: regex scan of raw query text — catches cases where the classifier
+        # timed out or returned None for short queries like "MGT311" / "IT362".
+        course_codes: list[str] = intent.course_codes if intent else []
+        if not course_codes and understanding and understanding.query_raw:
+            course_codes = [
+                m.upper()
+                for m in _COURSE_CODE_RE.findall(understanding.query_raw)
+            ]
+
         row: dict = {
             "event_type":         event_type,
             "session_id":         session_id,
@@ -799,7 +819,7 @@ async def _log_event(
                                    else None),
             "intent_type":        intent.intent_type if intent else None,
             "intent_confidence":  intent.confidence  if intent else None,
-            "course_codes":       intent.course_codes if intent else [],
+            "course_codes":       course_codes,
             "concept_ids":        [],
             "retrieval_count":    result_count,
             "top_similarity":     top_similarity,
@@ -1905,8 +1925,16 @@ async def synthesize(req: SynthesizeRequest):
     # Not cached: zero-result, synthesis failures, queries with conversation history
     # (personalized multi-turn cannot be shared across users).
     # ---------------------------------------------------------------------------
-    primary_course = (intent.course_codes[0] if intent and intent.course_codes else None)
-    exam_type      = (intent.exam_type        if intent else None)
+    # Primary source: intent classifier. Fallback: regex scan of raw query.
+    # Ensures that bare course-code queries ("MGT311", "IT362") still get
+    # course-scoped retrieval, cache keys, and context injection even when
+    # the classifier timed out or returned an empty course_codes list.
+    _intent_codes = (intent.course_codes if intent and intent.course_codes else None)
+    if not _intent_codes:
+        _regex_codes = [m.upper() for m in _COURSE_CODE_RE.findall(req.query)]
+        _intent_codes = _regex_codes if _regex_codes else None
+    primary_course = _intent_codes[0] if _intent_codes else None
+    exam_type      = (intent.exam_type if intent else None)
     c_key = _cache_key(
         understanding.query_normalized or req.query,
         primary_course,

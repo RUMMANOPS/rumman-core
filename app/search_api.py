@@ -1938,7 +1938,7 @@ async def ops_status():
             _safe_count(http, f"{base}/telegram_backfill_jobs",
                         {"status": "eq.failed", "select": "id"}),
             _safe_count(http, f"{base}/source_documents",
-                        {"job_status": "eq.pending_extraction", "select": "id"}),
+                        {"question_extraction_status": "eq.pending", "select": "id"}),
             _safe_count(http, f"{base}/source_documents",
                         {"select": "id"}),
             _safe_count(http, f"{base}/processing_jobs",
@@ -1979,7 +1979,7 @@ async def ops_status():
         # ── media pending (telegram_media jobs) ──────────────────────────────
         media_pending = await _safe_count(http, f"{base}/processing_jobs", {
             "job_type": "eq.telegram_media",
-            "status":   "in.(pending,running)",
+            "status":   "eq.pending",
             "select":   "id",
         })
 

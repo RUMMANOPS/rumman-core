@@ -2387,6 +2387,18 @@ def _compute_assets(
     else:
         ac_state, ac_benefit = "مبكر", "لا"
 
+    # Academic Intelligence Layer (Tier 1 + 2 + 3)
+    # Powered by: get_recurring_topics RPC (live exam patterns) + learning_events (student gaps)
+    if exam_questions >= 15_000:
+        ai_state, ai_benefit = "قوي", "نعم"
+        ai_desc = f"{exam_questions:,} سؤال · رمان يعرف ما يتكرر في كل مادة ويقارنه بفجوات الطالب"
+    elif exam_questions >= 5_000:
+        ai_state, ai_benefit = "متوسط", "جزئياً"
+        ai_desc = f"{exam_questions:,} سؤال · تحليل التكرار نشط"
+    else:
+        ai_state, ai_benefit = "مبكر", "لا"
+        ai_desc = "بيانات الاختبارات غير كافية بعد للتحليل"
+
     return {
         "community": {
             "label": "المجتمع",
@@ -2422,6 +2434,13 @@ def _compute_assets(
             "state": ac_state,
             "benefit": ac_benefit,
             "note": None,
+        },
+        "academic_intelligence": {
+            "label": "الذكاء الأكاديمي",
+            "desc":  ai_desc,
+            "state": ai_state,
+            "benefit": ai_benefit,
+            "note": "يعرف ما يتكرر في الاختبارات · يرى فجوات الطالب · يصل التقاطع",
         },
     }
 
@@ -2891,7 +2910,7 @@ function render(d){
   const bhtml=d.main_blocker?`<div class="blocker"><span>⚠</span><span>${d.main_blocker}</span></div>`:`<div class="ok-box">✓ لا عقبات — المشروع يسير بشكل طبيعي</div>`;
   document.getElementById('verdict').innerHTML=`<div class="verdict-top"><div><div class="rd-label">جاهزية رمان للطالب</div><div class="rd-val" style="color:${lc}">${lr}</div></div></div>${bhtml}`;
   // Assets
-  const assets=d.assets||{}, ORDER=['community','exams','documents','operational_knowledge','academic_context'];
+  const assets=d.assets||{}, ORDER=['community','exams','documents','operational_knowledge','academic_context','academic_intelligence'];
   document.getElementById('assets').innerHTML=ORDER.filter(k=>assets[k]).map(k=>acard(assets[k])).join('');
   // Delta
   const snap={m:kn.messages_total||0,q:kn.exam_questions||0,d:kn.source_documents||0,ts:Date.now()};

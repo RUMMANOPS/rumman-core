@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-Schema changes for RUMMAN's Supabase database. 47 migrations total (001–047).
+Schema changes for RUMMAN's Supabase database. 51 migrations total (001–051).
 
 ## How to apply a migration
 
@@ -60,6 +60,10 @@ Schema changes for RUMMAN's Supabase database. 47 migrations total (001–047).
 | `045_exam_bank_allowlist.sql` | `exam_bank_allowlist` — courses approved for public exam bank access | `app/search_api.py` |
 | `046_operational_intelligence_layer.sql` | `pipeline_runs`, `community_qa`, `current_academic_context` VIEW; fingerprint + pipeline columns on `exam_questions`/`document_chunks` | `app/search_api.py` (Cockpit) |
 | `047_student_os_foundation.sql` | `student_mastery`, `student_academic_profile`, `proactive_surface_queue` — Student OS data foundation | `student_profile_worker` (gated, not yet active) |
+| `048_institutional_intelligence.sql` | `program_intelligence`, `course_sections`, `section_seat_snapshots`, `official_announcements`; ALTER `kg_faculty` add rank/cv_url/profile_verified | institutional scrapers (gated) |
+| `049_behavioral_intelligence.sql` | `concept_confusion_registry`, `course_behavioral_profile`; `get_course_behavioral_intelligence()` RPC; `refresh_course_behavioral_profile()` fn | `app/search_api.py`, course_behavioral_worker (gated) |
+| `050_fix_behavioral_refresh_fn.sql` | Fix `refresh_course_behavioral_profile` — learning_events uses `occurred_at` not `created_at` | — |
+| `051_fix_behavioral_refresh_fn_v2.sql` | Fix `refresh_course_behavioral_profile` — message_signals uses `extracted_at` not `created_at` | — |
 
 ## How to apply via CLI
 

@@ -56,6 +56,7 @@ Deployed on Railway. `Procfile` defines **eight independent processes** — they
 | `topic_normalizer` | `app/topic_normalizer_worker.py` | Normalizes free-form topic_tags → `kg_topics` canonical registry + `kg_topic_aliases`. Updates `exam_questions.topic_ids`. | Gated: `TOPIC_NORMALIZER_WORKER_ENABLED=true` |
 | `syllabus_parser` | `app/syllabus_parser_worker.py` | Parses course syllabi (DOCX/PDF) → `kg_syllabi` + `kg_chapters`. Bootstrap mode reads local files; live mode polls source_documents. | Gated: `SYLLABUS_PARSER_WORKER_ENABLED=true` |
 | `chapter_attribution` | `app/chapter_attribution_worker.py` | Maps exam_questions → kg_chapters via topic embedding similarity. Sets chapter_id FK + chapter_verified=true. Calls refresh_chapter_stats(). | Gated: `CHAPTER_ATTRIBUTION_WORKER_ENABLED=true` |
+| `concept_confusion` | `app/concept_confusion_worker.py` | Reads learning_events (grounded=false, concept_tags non-empty) over a rolling window, counts failures per (concept × course), UPSERTs into concept_confusion_registry. Populates confusion_score + exam_frequency → auto-updates critical_intersection GENERATED column. | Gated: `CONCEPT_CONFUSION_WORKER_ENABLED=true` |
 
 **Note on session architecture (three distinct StringSessions — identity-based names):**
 - `TELEGRAM_LISTENER_GHAYTH_SESSION` (غيث, +966582282200) — passive listener account; used by `listener` (rumman_engine.py). Backward-compat fallback: `TELEGRAM_GHAYTH_SESSION` → `TELEGRAM_SESSION_STRING` accepted during Railway transition.

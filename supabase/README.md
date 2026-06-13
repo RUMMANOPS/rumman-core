@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-Schema changes for RUMMAN's Supabase database. 51 migrations total (001–051).
+Schema changes for RUMMAN's Supabase database. 57 migrations total (001–057).
 
 ## How to apply a migration
 
@@ -64,6 +64,12 @@ Schema changes for RUMMAN's Supabase database. 51 migrations total (001–051).
 | `049_behavioral_intelligence.sql` | `concept_confusion_registry`, `course_behavioral_profile`; `get_course_behavioral_intelligence()` RPC; `refresh_course_behavioral_profile()` fn | `app/search_api.py`, course_behavioral_worker (gated) |
 | `050_fix_behavioral_refresh_fn.sql` | Fix `refresh_course_behavioral_profile` — learning_events uses `occurred_at` not `created_at` | — |
 | `051_fix_behavioral_refresh_fn_v2.sql` | Fix `refresh_course_behavioral_profile` — message_signals uses `extracted_at` not `created_at` | — |
+| `052_seu_institutional_canon.sql` | `seu_colleges_canon` (6 colleges, caic/afsc/hsc/satsc mapped), `seu_programs_canon` (21 programs), `seu_org_aliases` (44 aliases); additive FKs on `official_announcements`, `course_sections`, `kg_faculty`; `resolve_college_alias()` RPC; `canon_coverage_check` view | institutional scrapers |
+| `053_seu_academic_structure_correction.sql` | Fix MCS bachelor→master; MBADM→MDM; BSBA parent program; concentration_of FK; 16 Applied College diploma programs; `seu_academic_tracks_canon` (double major/minor); website_domain on APPLIED | institutional scrapers |
+| `054_canon_propagation_exam_docs.sql` | `college_canon_code` FK on `exam_questions` + `source_documents`; `seu_course_college_map` (prefix resolver); `resolve_course_to_college()` RPC; backfill 15,820/17,195 exam_questions (92%); `college_exam_coverage` view | Cockpit gap dashboard |
+| `055_canon_propagation_behavioral.sql` | `college_canon_code` FK on `course_behavioral_profile` + `concept_confusion_registry`; CTE rewrite of `college_exam_coverage` (fixes 500 timeout); `concept_temporal_trajectory` table (concept time-series, compounding asset); `institutional_behavioral_clock` view; `college_knowledge_gap` view; `concept_cooccurrence_log` table | Cockpit gap dashboard, behavioral intelligence |
+| `056_seed_concept_temporal_trajectory.sql` | Seed 3,287 (concept × course) rows into `concept_temporal_trajectory` from `exam_questions.topic_tags` — Year Zero historical snapshot (`academic_year='1446'`). exam_appearances = actual frequency in corpus. confusion_score = 0 pending concept_confusion_worker. | concept_temporal_trajectory |
+| `057_course_health_and_concept_tags.sql` | `learning_events.concept_tags TEXT[]` (GIN + partial indexes); `course_health_score` VIEW — composite 0–100 score (exam_pts 0–40, corpus_pts 0–30, topic_pts 0–20, confusion_pts 0–10). Health tier: green ≥80, yellow ≥50, red <50. No worker — self-updates. | `app/search_api.py`, Cockpit |
 
 ## How to apply via CLI
 

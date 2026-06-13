@@ -55,8 +55,9 @@ HEADERS = {
     "Prefer":        "return=representation",
 }
 
-# Course code extraction patterns
-_COURSE_CODE_RE = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b')
+# Course code extraction — English (IT353) and Arabic (قنن315) patterns
+_COURSE_CODE_RE    = re.compile(r'\b([A-Z]{2,6}\d{3,4})\b')
+_AR_COURSE_CODE_RE = re.compile(r'([؀-ۿ]{2,6}\d{3,4})')
 
 _PARSE_SYSTEM = """\
 You are an academic syllabus analyst for Saudi Electronic University (SEU).
@@ -138,9 +139,14 @@ def _extract_text_from_docx(path: Path) -> str:
 
 
 def _infer_course_code(text: str, filename: str) -> Optional[str]:
-    """Try to extract course code from filename or text."""
+    """Try to extract course code from filename or text (English then Arabic)."""
     for candidate in [filename, text[:500]]:
         m = _COURSE_CODE_RE.search(candidate)
+        if m:
+            return m.group(1)
+    # Fallback: Arabic course codes like قنن315, نظم201
+    for candidate in [filename, text[:500]]:
+        m = _AR_COURSE_CODE_RE.search(candidate)
         if m:
             return m.group(1)
     return None
@@ -261,7 +267,8 @@ async def process_local_file(client: AsyncOpenAI, http: httpx.AsyncClient, path:
         log("NO_CHAPTERS", course=course_code, file=path.name[:60])
         return False
 
-    actual_code = parsed.get("course_code") or course_code
+    # Trust filename-inferred code over GPT output (OCR artifacts corrupt Arabic codes)
+    actual_code = course_code or parsed.get("course_code")
     syllabus_id = await _store_syllabus(http, actual_code, parsed, text, None)
     if not syllabus_id:
         return False

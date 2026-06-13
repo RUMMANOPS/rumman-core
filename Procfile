@@ -10,5 +10,6 @@ question_extraction: python3 app/question_extraction_worker.py
 topic_normalizer: python3 app/topic_normalizer_worker.py
 syllabus_parser: python3 app/syllabus_parser_worker.py
 chapter_attribution: python3 app/chapter_attribution_worker.py
+concept_confusion: python3 app/concept_confusion_worker.py
 telegram_signal: python3 app/telegram_signal_worker.py
 watchdog: python3 scripts/watchdog.py

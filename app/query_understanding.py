@@ -62,6 +62,12 @@ class IntentResult:
     confidence: float
     clarification_needed: bool
     clarification_question: Optional[str]
+    concept_tags: list[str] = field(default_factory=list)
+    # 1–3 normalized academic concept labels extracted from the query.
+    # Powers concept_cooccurrence_log: two concepts queried in the same session
+    # = a cognitive link not documented in any textbook.
+    # Populated by the intent classifier. Empty for procedural queries
+    # (exam_schedule, deadline, resource, clarify, unknown).
 
 
 @dataclass
@@ -191,7 +197,8 @@ Return ONLY valid JSON matching this schema (no extra keys, no explanation):
   "source_type_filter": "<exam | study_plan | upload | null>",
   "confidence": <float 0.0–1.0>,
   "clarification_needed": <true | false>,
-  "clarification_question": "<Gulf Arabic question to ask student for clarification, or null>"
+  "clarification_question": "<Gulf Arabic question to ask student for clarification, or null>",
+  "concept_tags": ["1–3 normalized academic concept labels that the student is asking ABOUT. Use lowercase English with underscores when possible (e.g. agency_theory, net_present_value, murabaha_contract, corporate_governance). Use Arabic only when no standard English term exists (e.g. الأخلاق_الإسلامية). Empty array [] for: exam_schedule, deadline, resource, clarify, unknown intents, or when no specific academic concept is targeted."]
 }
 
 Intent type guide:
@@ -248,7 +255,7 @@ async def classify_intent(
                     {"role": "user",   "content": user_content},
                 ],
                 temperature=0,
-                max_tokens=400,
+                max_tokens=500,
                 response_format={"type": "json_object"},
             ),
             timeout=timeout,
@@ -276,6 +283,14 @@ async def classify_intent(
             s = str(val).strip()
             return None if s.lower() in ("null", "none", "") else s
 
+        # concept_tags: normalize to lowercase-underscore, cap at 5, strip empties
+        raw_tags = raw.get("concept_tags") or []
+        concept_tags = [
+            t.lower().strip().replace(" ", "_")
+            for t in raw_tags
+            if isinstance(t, str) and t.strip()
+        ][:5]
+
         return IntentResult(
             normalized_text=raw.get("normalized_text", query) or query,
             english_query=english_query,
@@ -286,6 +301,7 @@ async def classify_intent(
             confidence=float(raw.get("confidence", 0.5)),
             clarification_needed=bool(raw.get("clarification_needed", False)),
             clarification_question=raw.get("clarification_question"),
+            concept_tags=concept_tags,
         )
 
     except asyncio.TimeoutError:

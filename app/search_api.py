@@ -95,6 +95,24 @@ _MSG_SIGNAL_LABELS: dict[str, str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Concept co-occurrence — in-memory session cache
+#
+# Maps session_id → (concept_tags, course_codes) from the PREVIOUS query
+# in that session. When the next query in the same session arrives, we pair
+# its concept_tags with the cached ones and write to concept_cooccurrence_log.
+#
+# Why in-memory (not Supabase read-back):
+#   • Zero latency — no extra DB round-trip per query
+#   • Avoids extra DB read-back per query (concept_tags also stored in learning_events)
+#   • Pairs lost on process restart are acceptable (fire-and-forget asset)
+#
+# Max size guard: evict oldest entries beyond 2,000 sessions.
+# At ~7 queries/session average, 2,000 slots ≈ 14,000 queries in memory.
+# ---------------------------------------------------------------------------
+_concept_session_cache: dict[str, tuple[list[str], list[str]]] = {}
+_CONCEPT_CACHE_MAX = 2_000
+
+# ---------------------------------------------------------------------------
 # Synthesis result cache
 #
 # During exam season, 60-80% of queries are semantically identical
@@ -820,7 +838,7 @@ async def _log_event(
             "intent_type":        intent.intent_type if intent else None,
             "intent_confidence":  intent.confidence  if intent else None,
             "course_codes":       course_codes,
-            "concept_ids":        [],
+            "concept_tags":       intent.concept_tags if intent else [],
             "retrieval_count":    result_count,
             "top_similarity":     top_similarity,
             "grounded":           grounded,
@@ -833,8 +851,83 @@ async def _log_event(
                 headers=HEADERS,
                 json=row,
             )
+            # Fire-and-forget: log concept co-occurrences for cognitive graph
+            if session_id and intent and intent.concept_tags:
+                await _log_concept_cooccurrence(
+                    http, session_id, intent.concept_tags, course_codes
+                )
     except Exception as exc:
         log.warning("learning_event write failed (non-fatal): %s", exc)
+
+
+async def _log_concept_cooccurrence(
+    http: httpx.AsyncClient,
+    session_id: str,
+    current_tags: list[str],
+    current_courses: list[str],
+) -> None:
+    """
+    Log concept co-occurrence pairs from consecutive queries in the same session.
+    Uses an in-memory cache (_concept_session_cache) to hold the previous query's
+    tags — avoids a DB round-trip per query.
+
+    Pairs are written to concept_cooccurrence_log with concept_a < concept_b
+    (canonical ordering enforced by the table CHECK constraint and LEAST/GREATEST here).
+
+    Fire-and-forget: never raises, never blocks the response path.
+    """
+    global _concept_session_cache
+
+    prev = _concept_session_cache.get(session_id)
+
+    # Evict oldest entries if cache is at capacity
+    if len(_concept_session_cache) >= _CONCEPT_CACHE_MAX and session_id not in _concept_session_cache:
+        oldest = next(iter(_concept_session_cache))
+        del _concept_session_cache[oldest]
+
+    # Update cache with current query (for the NEXT query in this session)
+    _concept_session_cache[session_id] = (current_tags, current_courses)
+
+    if not prev:
+        return
+
+    prev_tags, prev_courses = prev
+    if not prev_tags:
+        return
+
+    # Build all cross-product pairs between previous and current concept tags.
+    # Same-concept pairs are skipped (a student asking the same concept twice
+    # is not a co-occurrence signal, it's a clarification loop).
+    rows = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for t_prev in prev_tags:
+        for t_curr in current_tags:
+            if t_prev == t_curr:
+                continue
+            a = min(t_prev, t_curr)
+            b = max(t_prev, t_curr)
+            if (a, b) in seen_pairs:
+                continue
+            seen_pairs.add((a, b))
+            rows.append({
+                "session_id":    session_id,
+                "concept_a":     a,
+                "concept_b":     b,
+                "course_code_a": prev_courses[0]    if prev_courses    else None,
+                "course_code_b": current_courses[0] if current_courses else None,
+            })
+
+    if not rows:
+        return
+
+    try:
+        await http.post(
+            f"{SUPABASE_URL}/rest/v1/concept_cooccurrence_log",
+            headers=HEADERS,
+            json=rows,
+        )
+    except Exception:
+        pass  # fire-and-forget — loss of co-occurrence pairs is acceptable
 
 
 # ---------------------------------------------------------------------------

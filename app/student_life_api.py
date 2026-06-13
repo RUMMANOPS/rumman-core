@@ -447,7 +447,7 @@ async def student_inbox(
 
         # Intelligence items (extracted from Telegram) — last 14 days
         items = await _get(db, "intelligence_items", {
-            "select":    "id,item_type,title,content,course_code,due_date,confidence,created_at",
+            "select":    "id,item_type,title,description,course_code,due_date,confidence,created_at",
             "tenant_id": f"eq.{TENANT_ID}",
             "created_at": f"gte.{_days_from_now(-14)}",
             "order":     "created_at.desc",
@@ -693,7 +693,7 @@ async def course_intelligence(
 
         # Recent announcements
         announcements = await _get(db, "intelligence_items", {
-            "select":      "item_type,title,content,due_date,created_at",
+            "select":      "item_type,title,description,due_date,created_at",
             "course_code": f"eq.{course_code}",
             "tenant_id":   f"eq.{TENANT_ID}",
             "order":       "created_at.desc",

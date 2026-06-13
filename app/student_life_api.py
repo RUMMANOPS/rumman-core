@@ -217,20 +217,21 @@ async def student_today(student_id: str):
         # Upcoming exam proximity (days_to_exam per course)
         # Pull from academic_calendar where event mentions a course code
         cal_rows = await _get(db, "academic_calendar", {
-            "select":  "event_type,event_name,event_date",
-            "order":   "event_date.asc",
+            "select":  "event_type,event_name_ar,start_date,end_date",
+            "order":   "start_date.asc",
             "limit":   "50",
         })
         exam_proximities = []
         for row in cal_rows:
-            if "اختبار" in (row.get("event_name") or "") or row.get("event_type") == "exam":
+            name = row.get("event_name_ar") or ""
+            if "اختبار" in name or row.get("event_type") in ("midterm_exam", "final_exam", "exam"):
                 try:
-                    ed = datetime.fromisoformat(row["event_date"])
+                    ed = datetime.fromisoformat(row["start_date"])
                     days = (ed.date() - now.date()).days
                     if 0 <= days <= 14:
                         exam_proximities.append({
-                            "event_name": row["event_name"],
-                            "event_date": row["event_date"],
+                            "event_name": name,
+                            "event_date": row["start_date"],
                             "days_away":  days,
                         })
                 except Exception:
@@ -314,11 +315,11 @@ async def student_calendar(
 
         # Official academic calendar (semester-wide events)
         official = await _get(db, "academic_calendar", {
-            "select":    "id,event_type,event_name,event_date,hijri_date",
-            "event_date": f"gte.{start}",
-            "order":     "event_date.asc",
+            "select":     "id,event_type,event_name_ar,event_name_en,start_date,end_date",
+            "start_date": f"gte.{start}",
+            "order":      "start_date.asc",
         })
-        official = [e for e in official if e.get("event_date", "")[:10] <= end[:10]]
+        official = [e for e in official if e.get("start_date", "")[:10] <= end[:10]]
 
         # Tasks with due dates in range
         tasks = await _get(db, "student_tasks", {

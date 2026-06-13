@@ -249,14 +249,20 @@ async def student_today(student_id: str):
                 "course":   t.get("course_code"),
             })
         for req in requests:
-            if req.get("deadline_at") and req["deadline_at"][:10] <= _days_from_now(1)[:10]:
-                urgent.append({
-                    "type":     "request_deadline",
-                    "urgency":  "high",
-                    "title":    f"موعد طلب قريب: {req['title']}",
-                    "ref_id":   req["id"],
-                    "ref_type": "request",
-                })
+            if req.get("deadline_at"):
+                days_left = (
+                    datetime.fromisoformat(req["deadline_at"].replace("Z", "+00:00")).date()
+                    - now.date()
+                ).days
+                if days_left <= 3:
+                    urgent.append({
+                        "type":      "request_deadline",
+                        "urgency":   "critical" if days_left <= 1 else "high",
+                        "title":     f"موعد طلب قريب ({days_left} أيام): {req['title']}",
+                        "ref_id":    req["id"],
+                        "ref_type":  "request",
+                        "days_left": days_left,
+                    })
         for ep in exam_proximities[:3]:
             urgent.append({
                 "type":     "exam_approaching",

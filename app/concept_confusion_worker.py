@@ -243,16 +243,25 @@ async def run_once(http: httpx.AsyncClient) -> dict:
 
     for (concept, course), count in failure_counts.items():
         ef = exam_freq.get((concept, course), 0)
+        # confusion_score: capped at 100 (CHECK constraint); failed_queries = raw count
+        score  = min(100.0, float(count))
+        is_crit = score >= 50.0 and ef >= 2
         rows.append({
-            "tenant_id":          TENANT_ID,
-            "concept_name":       concept,
-            "course_code":        course,
-            "college_canon_code": college_map.get(course),
-            "confusion_score":    float(count),
-            "exam_frequency":     ef,
-            "last_updated":       now_iso,
+            "tenant_id":             TENANT_ID,
+            "concept_name":          concept,
+            "course_code":           course,
+            "college_canon_code":    college_map.get(course),
+            "failed_queries":        count,
+            "total_queries":         count,   # only failures tracked; floor estimate
+            "confusion_score":       score,
+            "exam_frequency":        ef,
+            "critical_intersection": is_crit,
+            "trend":                 "stable",
+            "last_queried_at":       now_iso,
+            "computed_at":           now_iso,
+            # first_seen_at intentionally omitted — preserved on UPDATE, DEFAULT now() on INSERT
         })
-        if count >= 50 and ef >= 2:
+        if is_crit:
             critical_predicted += 1
 
     # 6. Batch upsert

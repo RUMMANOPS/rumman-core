@@ -218,6 +218,14 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="RUMMAN Platform API", version="4.1", lifespan=lifespan)
 ai  = AsyncOpenAI(api_key=os.environ["OPENAI_API_KEY"])
 
+# Student Life OS router
+try:
+    from student_life_api import router as student_life_router
+    app.include_router(student_life_router)
+except Exception as _slo_err:
+    import logging
+    logging.getLogger(__name__).warning("student_life_api not loaded: %s", _slo_err)
+
 
 # ---------------------------------------------------------------------------
 # Request / response models

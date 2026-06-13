@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-Schema changes for RUMMAN's Supabase database. 58 migrations total (001–058).
+Schema changes for RUMMAN's Supabase database. 60 migrations total (001–060).
 
 ## How to apply a migration
 
@@ -71,6 +71,8 @@ Schema changes for RUMMAN's Supabase database. 58 migrations total (001–058).
 | `056_seed_concept_temporal_trajectory.sql` | Seed 3,287 (concept × course) rows into `concept_temporal_trajectory` from `exam_questions.topic_tags` — Year Zero historical snapshot (`academic_year='1446'`). exam_appearances = actual frequency in corpus. confusion_score = 0 pending concept_confusion_worker. | concept_temporal_trajectory |
 | `057_course_health_and_concept_tags.sql` | `learning_events.concept_tags TEXT[]` (GIN + partial indexes); `course_health_score` VIEW — composite 0–100 score (exam_pts 0–40, corpus_pts 0–30, topic_pts 0–20, confusion_pts 0–10). Health tier: green ≥80, yellow ≥50, red <50. No worker — self-updates. | `app/search_api.py`, Cockpit |
 | `058_fix_course_health_college_fallback.sql` | Fix `course_health_score` VIEW — `college_canon_code` fallback from `exam_questions` when `course_behavioral_profile` has no row for the course. | `course_health_score` VIEW |
+| `059_student_life_os_core.sql` | **Student Life OS kernel**: `student_tasks` (6 task types, priority, due_at, feedback loop), `student_calendar_events` (10 event types, reminder_minutes[], multi-source), `student_notifications` (6 categories, urgency tiers, deep-link actions). RPCs: `get_student_active_courses()`, `get_student_today()`. | `app/student_life_api.py` |
+| `060_student_requests.sql` | **Smart Request Center**: `request_templates` (10 SEU request types seeded with Arabic body templates, required_fields JSONB, deadline rules), `student_requests` (conversational request flow, draft→submitted lifecycle, conversation JSONB thread). RPC: `start_student_request()`. | `app/student_life_api.py` |
 
 ## How to apply via CLI
 

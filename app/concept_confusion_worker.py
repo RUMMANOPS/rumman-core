@@ -127,7 +127,10 @@ async def _fetch_trajectory_data(
         n       = row.get("exam_appearances") or 0
 
         if concept and course:
-            exam_freq[(concept, course)] += n
+            # Normalize to underscore format — intent classifier uses underscore,
+            # concept_temporal_trajectory seeds from topic_tags which use spaces.
+            concept_key = concept.lower().replace(" ", "_")
+            exam_freq[(concept_key, course)] += n
 
         if course and college and course not in college_map:
             college_map[course] = college

@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-Schema changes for RUMMAN's Supabase database. 57 migrations total (001–057).
+Schema changes for RUMMAN's Supabase database. 58 migrations total (001–058).
 
 ## How to apply a migration
 
@@ -70,6 +70,7 @@ Schema changes for RUMMAN's Supabase database. 57 migrations total (001–057).
 | `055_canon_propagation_behavioral.sql` | `college_canon_code` FK on `course_behavioral_profile` + `concept_confusion_registry`; CTE rewrite of `college_exam_coverage` (fixes 500 timeout); `concept_temporal_trajectory` table (concept time-series, compounding asset); `institutional_behavioral_clock` view; `college_knowledge_gap` view; `concept_cooccurrence_log` table | Cockpit gap dashboard, behavioral intelligence |
 | `056_seed_concept_temporal_trajectory.sql` | Seed 3,287 (concept × course) rows into `concept_temporal_trajectory` from `exam_questions.topic_tags` — Year Zero historical snapshot (`academic_year='1446'`). exam_appearances = actual frequency in corpus. confusion_score = 0 pending concept_confusion_worker. | concept_temporal_trajectory |
 | `057_course_health_and_concept_tags.sql` | `learning_events.concept_tags TEXT[]` (GIN + partial indexes); `course_health_score` VIEW — composite 0–100 score (exam_pts 0–40, corpus_pts 0–30, topic_pts 0–20, confusion_pts 0–10). Health tier: green ≥80, yellow ≥50, red <50. No worker — self-updates. | `app/search_api.py`, Cockpit |
+| `058_fix_course_health_college_fallback.sql` | Fix `course_health_score` VIEW — `college_canon_code` fallback from `exam_questions` when `course_behavioral_profile` has no row for the course. | `course_health_score` VIEW |
 
 ## How to apply via CLI
 

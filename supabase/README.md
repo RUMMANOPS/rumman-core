@@ -1,6 +1,6 @@
 # Supabase Migrations
 
-Schema changes for RUMMAN's Supabase database. 34 migrations total (001–034).
+Schema changes for RUMMAN's Supabase database. 47 migrations total (001–047).
 
 ## How to apply a migration
 
@@ -47,14 +47,25 @@ Schema changes for RUMMAN's Supabase database. 34 migrations total (001–034).
 | `032_message_signals.sql` | `message_signals` typed signals | `scripts/message_signal_worker.py` |
 | `033_backfill_tenant_id.sql` | Backfill missing `tenant_id` values | — |
 | `034_match_documents_fix.sql` | Fix `match_documents()` — `filter_tenant` UUID param, `metadata` JSONB return | `app/search_api.py` |
+| `035_exam_questions.sql` | `exam_questions` table — extracted questions from past exams | `app/question_extraction_worker.py` |
+| `036_knowledge_graph_core.sql` | `kg_topics`, `kg_topic_aliases`, `kg_faculty`, `kg_syllabi`, `kg_chapters`, `kg_provenance_edges` | knowledge graph workers |
+| `037_faculty_registry.sql` | `kg_faculty` extensions — teaching history, course assignments | `app/search_api.py` |
+| `038_question_clusters.sql` | `question_clusters` — exam question grouping by topic similarity | `app/search_api.py` |
+| `039_kg_rpcs.sql` | Knowledge graph RPCs — topic lookup, chapter attribution helpers | `app/search_api.py` |
+| `040_foundation_layer.sql` | Quarantine columns on `kg_syllabi`/`kg_chapters`; `student_interactions`; `get_recurring_topics()` RPC | `app/search_api.py` |
+| `041_telegram_signals.sql` | `telegram_signal_items` — typed signals extracted from Telegram channels | `app/intelligence_worker.py` |
+| `042_exam_attribution_columns.sql` | `exam_questions.chapter_id`, `chapter_verified`, topic attribution columns | `app/chapter_attribution_worker.py` |
+| `043_course_aliases.sql` | `course_aliases` — alternative course code / name mappings | `app/search_api.py` |
+| `044_faculty_course_bridge.sql` | `kg_faculty_sections` — faculty × course × semester teaching assignments | `app/search_api.py` |
+| `045_exam_bank_allowlist.sql` | `exam_bank_allowlist` — courses approved for public exam bank access | `app/search_api.py` |
+| `046_operational_intelligence_layer.sql` | `pipeline_runs`, `community_qa`, `current_academic_context` VIEW; fingerprint + pipeline columns on `exam_questions`/`document_chunks` | `app/search_api.py` (Cockpit) |
+| `047_student_os_foundation.sql` | `student_mastery`, `student_academic_profile`, `proactive_surface_queue` — Student OS data foundation | `student_profile_worker` (gated, not yet active) |
 
-## Why not Supabase CLI
+## How to apply via CLI
 
-The service-role key is not in the repository `.env`. Migrations are applied manually via the SQL editor.
-
-Once the service-role key is added to `.env`, switch to:
+The project is linked (`supabase projects list` shows ●). Apply pending migrations with:
 ```bash
-supabase db push
+supabase db push --linked
 ```
 
 ## Schema-as-code rule

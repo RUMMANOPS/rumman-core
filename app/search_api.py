@@ -226,6 +226,14 @@ except Exception as _slo_err:
     import logging
     logging.getLogger(__name__).warning("student_life_api not loaded: %s", _slo_err)
 
+# Auth & Identity router
+try:
+    from auth_api import router as auth_router
+    app.include_router(auth_router)
+except Exception as _auth_err:
+    import logging
+    logging.getLogger(__name__).warning("auth_api not loaded: %s", _auth_err)
+
 
 # ---------------------------------------------------------------------------
 # Request / response models

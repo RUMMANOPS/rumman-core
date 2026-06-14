@@ -31,9 +31,10 @@ from pydantic import BaseModel, Field
 
 load_dotenv()
 
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "")
-TENANT_ID    = "00000000-0000-0000-0000-000000000001"
+SUPABASE_URL    = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY    = os.environ.get("SUPABASE_KEY", "")
+TENANT_ID       = "00000000-0000-0000-0000-000000000001"
+SEARCH_API_BASE = os.environ.get("SEARCH_API_URL", "https://search-production-8a18.up.railway.app").rstrip("/")
 
 _HEADERS = {
     "apikey":        SUPABASE_KEY,
@@ -812,3 +813,202 @@ async def founder_cockpit(days: int = Query(default=7, ge=1, le=30)):
             "course_count":    len(health_rows),
             "confusion_registry_rows": len(registry),
         }
+
+
+# ---------------------------------------------------------------------------
+# Ask RUMMAN — Academic Intelligence Sensor
+# Every query is an Event, not just a question.
+# Signals (resolved / confused / task) feed learning_events → concept_confusion_worker.
+# ---------------------------------------------------------------------------
+
+import json as _json
+import logging as _logging
+
+_ask_log = _logging.getLogger("ask_rumman")
+
+
+class AskRequest(BaseModel):
+    query:        str
+    course_code:  Optional[str] = None
+    follow_up_of: Optional[str] = None   # event_id of previous exchange
+
+
+class SignalRequest(BaseModel):
+    signal_type: str                      # "resolved" | "confused" | "task"
+    task_title:  Optional[str] = None     # populated when signal_type == "task"
+
+
+def _time_context(academic_calendar_events: list) -> str:
+    """Derive time_context from upcoming academic events (already fetched for today)."""
+    if not academic_calendar_events:
+        return "normal"
+    now = datetime.now(timezone.utc)
+    for ev in academic_calendar_events:
+        start = ev.get("start_date", "")
+        if not start:
+            continue
+        try:
+            delta = (datetime.fromisoformat(start.replace("Z", "+00:00")) - now).days
+            ev_type = ev.get("event_type", "")
+            if ev_type in ("exam", "midterm", "final") and delta <= 7:
+                return "exam_approaching"
+            if ev_type in ("registration_window", "add_drop") and delta <= 5:
+                return "registration_window"
+            if ev_type in ("payment_deadline",) and delta <= 3:
+                return "deadline_day"
+        except Exception:
+            continue
+    return "normal"
+
+
+@router.post("/student/{student_id}/ask")
+async def ask_rumman(student_id: str, body: AskRequest):
+    """
+    Academic Intelligence Sensor — wraps /synthesize and logs a learning_event.
+    Returns: answer, sources, grounded, source_count, event_id, course_code, concept_names.
+    The event_id is used by the signal endpoint to record resolution/confusion/task intents.
+    """
+    import uuid as _uuid
+
+    # 1. Call /synthesize
+    synth_payload: dict = {
+        "query":      body.query,
+        "session_id": student_id,
+        "user_id":    student_id,
+    }
+    if body.course_code:
+        synth_payload["course_code"] = body.course_code
+
+    async with httpx.AsyncClient(timeout=30) as http:
+        try:
+            synth_resp = await http.post(f"{SEARCH_API_BASE}/synthesize", json=synth_payload)
+            synth_resp.raise_for_status()
+            synth = synth_resp.json()
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"synthesize unavailable: {exc}")
+
+    answer       = synth.get("answer") or synth.get("synthesized_answer") or ""
+    sources      = synth.get("sources") or synth.get("results") or []
+    grounded     = bool(sources)
+    source_count = len(sources)
+    course_code  = (
+        body.course_code
+        or synth.get("course_code")
+        or (sources[0].get("course_code") if sources else None)
+    )
+
+    # 2. Extract concept names from sources metadata (best-effort)
+    concept_names: list = []
+    for s in sources[:5]:
+        meta = s.get("metadata") or {}
+        for field in ("concept", "topic", "title", "concept_name"):
+            v = meta.get(field)
+            if v and isinstance(v, str) and v not in concept_names:
+                concept_names.append(v)
+
+    # 3. Log to learning_events (user_id = null; student_id stored in metadata)
+    event_id = str(_uuid.uuid4())
+    async with _db() as db:
+        event_payload = {
+            "id":            event_id,
+            "event_type":    "query",
+            "query_raw":     body.query,
+            "grounded":      grounded,
+            "retrieval_count": source_count,
+            "metadata": {
+                "student_id":          student_id,
+                "course_code":         course_code,
+                "concept_names":       concept_names,
+                "follow_up_of":        body.follow_up_of,
+                "resolution_signal":   None,
+                "confusion_signal":    None,
+                "task_generated":      False,
+                "time_context":        "normal",   # updated by client if needed
+                "source_count":        source_count,
+            },
+        }
+        if course_code:
+            event_payload["course_codes"] = [course_code]
+        try:
+            await _post(db, "learning_events", event_payload)
+        except Exception as exc:
+            _ask_log.warning("learning_event write failed (non-fatal): %s", exc)
+
+    return {
+        "event_id":      event_id,
+        "answer":        answer,
+        "sources":       sources,
+        "grounded":      grounded,
+        "source_count":  source_count,
+        "course_code":   course_code,
+        "concept_names": concept_names,
+    }
+
+
+@router.patch("/student/{student_id}/ask/{event_id}/signal")
+async def signal_ask(student_id: str, event_id: str, body: SignalRequest):
+    """
+    Record a resolution, confusion, or task-intent signal on a learning_event.
+    Signals feed the concept_confusion_worker compounding asset.
+
+    signal_type:
+      "resolved"  → event_type = feedback_positive  (confusion resolved)
+      "confused"  → event_type = feedback_negative  (confusion persists)
+      "task"      → event_type = feedback_positive + auto-create student_task
+    """
+    if body.signal_type not in ("resolved", "confused", "task"):
+        raise HTTPException(status_code=400, detail="signal_type must be resolved | confused | task")
+
+    event_type_map = {
+        "resolved": "feedback_positive",
+        "confused":  "feedback_negative",
+        "task":      "feedback_positive",
+    }
+    new_event_type = event_type_map[body.signal_type]
+
+    async with _db() as db:
+        # Fetch current metadata to merge
+        rows = await _get(db, "learning_events", {
+            "id":     f"eq.{event_id}",
+            "select": "metadata",
+        })
+        current_meta: dict = (rows[0].get("metadata") or {}) if rows else {}
+
+        # Merge signal into metadata
+        current_meta["resolution_signal"] = (body.signal_type == "resolved") or (body.signal_type == "task")
+        current_meta["confusion_signal"]  = body.signal_type == "confused"
+        if body.signal_type == "task":
+            current_meta["task_generated"] = True
+
+        await _patch(db, "learning_events",
+                     {"id": event_id},
+                     {"event_type": new_event_type, "metadata": current_meta})
+
+        # Auto-create student_task when signal_type == "task"
+        task_id = None
+        if body.signal_type == "task" and body.task_title:
+            task_title = body.task_title.strip()[:200]
+            course     = current_meta.get("course_code")
+            try:
+                task = await _post(db, "student_tasks", {
+                    "student_id":  student_id,
+                    "tenant_id":   TENANT_ID,
+                    "title":       task_title,
+                    "task_type":   "reading",
+                    "priority":    2,
+                    "status":      "pending",
+                    "course_code": course,
+                })
+                task_id = task.get("id")
+                # Back-patch learning_event with task_id
+                current_meta["task_id"] = task_id
+                await _patch(db, "learning_events", {"id": event_id}, {"metadata": current_meta})
+            except Exception as exc:
+                _ask_log.warning("task creation from ask failed (non-fatal): %s", exc)
+
+    return {
+        "event_id":   event_id,
+        "signal":     body.signal_type,
+        "event_type": new_event_type,
+        "task_id":    task_id,
+    }

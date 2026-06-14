@@ -738,6 +738,137 @@ async def course_intelligence(
 
 
 # ---------------------------------------------------------------------------
+# Exam Practice
+# ---------------------------------------------------------------------------
+
+_ALLOWED_EXAM_TYPES = {"midterm", "final", "quiz", "general", "all"}
+_DEFAULT_TF_OPTIONS = [{"key": "صح", "text": "صح"}, {"key": "خطأ", "text": "خطأ"}]
+
+
+@router.get("/student/{student_id}/exam-practice/{course_code}")
+async def exam_practice(
+    student_id:  str,
+    course_code: str,
+    exam_type:   Optional[str] = Query(default=None, description="midterm|final|quiz|general|all"),
+    topic:       Optional[str] = Query(default=None,  description="Optional topic filter (substring match on topic_tags)"),
+    limit:       int           = Query(default=10,    description="Number of questions, 1-25. Default 10."),
+):
+    """
+    Exam practice questions for a specific course.
+    Returns MCQ and true_false questions where model_answer IS NOT NULL.
+    Ordered by extraction_confidence DESC.
+    """
+    # ── Validate course_code ──────────────────────────────────────────────
+    code = course_code.strip().upper()
+    if not code or code == "UNKNOWN":
+        raise HTTPException(400, "course_code غير صالح أو غير محدد")
+
+    # ── Validate exam_type ────────────────────────────────────────────────
+    et = (exam_type or "all").lower().strip()
+    if et not in _ALLOWED_EXAM_TYPES:
+        raise HTTPException(
+            400,
+            f"exam_type غير مسموح: '{exam_type}'. القيم المتاحة: {', '.join(sorted(_ALLOWED_EXAM_TYPES))}",
+        )
+
+    # ── Clamp limit ───────────────────────────────────────────────────────
+    if limit < 1:
+        limit = 10
+    elif limit > 25:
+        limit = 25
+
+    # ── Fetch from Supabase ───────────────────────────────────────────────
+    # Fetch extra to compensate for Python-side filtering (empty answers, bad MCQ options, topic)
+    fetch_limit = min(limit * 8 if topic else limit * 4, 200)
+
+    params: dict[str, Any] = {
+        "select":        "id,course_code,exam_type,exam_year,question_type,"
+                         "question_text,answer_options,model_answer,topic_tags,"
+                         "extraction_confidence",
+        "course_code":   f"eq.{code}",
+        "question_text": "not.is.null",
+        "model_answer":  "not.is.null",
+        "question_type": "in.(mcq,true_false)",
+        "order":         "extraction_confidence.desc.nullslast",
+        "limit":         str(fetch_limit),
+    }
+
+    if et != "all":
+        params["exam_type"] = f"eq.{et}"
+
+    try:
+        async with _db() as db:
+            rows = await _get(db, "exam_questions", params)
+    except HTTPException:
+        raise HTTPException(500, "تعذّر جلب الأسئلة. حاول مرة أخرى.")
+    except Exception:
+        raise HTTPException(500, "تعذّر جلب الأسئلة. حاول مرة أخرى.")
+
+    # ── Python-side filtering & shaping ──────────────────────────────────
+    topic_lower = topic.lower().strip() if topic else None
+    questions: list[dict] = []
+
+    for row in rows:
+        # Skip empty model_answer (null already filtered by DB; guard against empty string)
+        ma = (row.get("model_answer") or "").strip()
+        if not ma:
+            continue
+
+        q_type  = row.get("question_type")
+        options = row.get("answer_options")
+
+        # Validate / normalise answer_options
+        if q_type == "mcq":
+            if not isinstance(options, list) or len(options) == 0:
+                continue           # MCQ without usable options is discarded
+        elif q_type == "true_false":
+            if not isinstance(options, list) or len(options) == 0:
+                options = _DEFAULT_TF_OPTIONS
+
+        # Topic filter — substring match against topic_tags array of strings
+        if topic_lower:
+            tags = row.get("topic_tags") or []
+            matched = any(
+                topic_lower in (t.lower() if isinstance(t, str) else str(t).lower())
+                for t in tags
+            )
+            if not matched:
+                continue
+
+        questions.append({
+            "id":                    row["id"],
+            "course_code":           row["course_code"],
+            "exam_type":             row.get("exam_type"),
+            "exam_year":             row.get("exam_year"),
+            "question_type":         q_type,
+            "question_text":         row["question_text"],
+            "answer_options":        options,
+            "model_answer":          ma,
+            "topic_tags":            row.get("topic_tags") or [],
+            "extraction_confidence": row.get("extraction_confidence"),
+        })
+
+        if len(questions) >= limit:
+            break
+
+    # ── Build response ────────────────────────────────────────────────────
+    response: dict[str, Any] = {
+        "student_id":  student_id,
+        "course_code": code,
+        "exam_type":   et,
+        "topic":       topic or None,
+        "limit":       limit,
+        "count":       len(questions),
+        "questions":   questions,
+    }
+
+    if not questions:
+        response["message"] = "لا توجد أسئلة تدريبية جاهزة لهذا المقرر حاليًا."
+
+    return response
+
+
+# ---------------------------------------------------------------------------
 # Founder Cockpit
 # ---------------------------------------------------------------------------
 

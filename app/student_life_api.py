@@ -828,9 +828,10 @@ _ask_log = _logging.getLogger("ask_rumman")
 
 
 class AskRequest(BaseModel):
-    query:        str
-    course_code:  Optional[str] = None
-    follow_up_of: Optional[str] = None   # event_id of previous exchange
+    query:                str
+    course_code:          Optional[str]        = None
+    follow_up_of:         Optional[str]        = None   # event_id of previous exchange
+    conversation_history: Optional[list[dict]] = None   # [{role: user|assistant, content: str}]
 
 
 class SignalRequest(BaseModel):
@@ -878,6 +879,8 @@ async def ask_rumman(student_id: str, body: AskRequest):
     }
     if body.course_code:
         synth_payload["course_code"] = body.course_code
+    if body.conversation_history:
+        synth_payload["conversation_history"] = body.conversation_history
 
     async with httpx.AsyncClient(timeout=30) as http:
         try:

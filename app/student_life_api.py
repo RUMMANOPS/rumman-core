@@ -107,6 +107,8 @@ class TaskCreate(BaseModel):
     task_type:      str                = "personal"
     priority:       int                = Field(default=2, ge=1, le=3)
     due_at:         Optional[str]      = None
+    opens_at:       Optional[str]      = None
+    closes_at:      Optional[str]      = None
     course_code:    Optional[str]      = None
     notes:          Optional[str]      = None
     remind_at:      Optional[str]      = None
@@ -118,6 +120,8 @@ class TaskUpdate(BaseModel):
     title:          Optional[str]      = None
     priority:       Optional[int]      = None
     due_at:         Optional[str]      = None
+    opens_at:       Optional[str]      = None
+    closes_at:      Optional[str]      = None
     snoozed_until:  Optional[str]      = None
     notes:          Optional[str]      = None
     acted_on_at:    Optional[str]      = None
@@ -215,25 +219,33 @@ async def student_today(student_id: str):
             for c, n in sorted(course_hits.items(), key=lambda x: -x[1])
         ]
 
-        # Upcoming exam proximity (days_to_exam per course)
-        # Pull from academic_calendar where event mentions a course code
+        # Official academic calendar — next 14 days (same horizon as Today screen)
+        # CalendarScreen uses /calendar for broader academic view
+        fourteen_days = _days_from_now(14)
         cal_rows = await _get(db, "academic_calendar", {
-            "select":  "event_type,event_name_ar,start_date,end_date",
-            "order":   "start_date.asc",
-            "limit":   "50",
+            "select":     "id,event_type,event_name_ar,event_name_en,start_date,end_date",
+            "start_date": f"gte.{today}",
+            "order":      "start_date.asc",
+            "limit":      "50",
         })
+        academic_events = [
+            e for e in cal_rows
+            if e.get("start_date", "")[:10] <= fourteen_days[:10]
+        ]
+
+        # exam_proximities kept for backward compat — exams within 14 days (max 3)
         exam_proximities = []
         for row in cal_rows:
             name = row.get("event_name_ar") or ""
             if "اختبار" in name or row.get("event_type") in ("midterm_exam", "final_exam", "exam"):
                 try:
                     ed = datetime.fromisoformat(row["start_date"])
-                    days = (ed.date() - now.date()).days
-                    if 0 <= days <= 14:
+                    days_away = (ed.date() - now.date()).days
+                    if 0 <= days_away <= 14:
                         exam_proximities.append({
                             "event_name": name,
                             "event_date": row["start_date"],
-                            "days_away":  days,
+                            "days_away":  days_away,
                         })
                 except Exception:
                     pass
@@ -291,6 +303,7 @@ async def student_today(student_id: str):
             "unread_notifications": len(notifs),
             "active_courses":    active_courses[:8],
             "exam_proximities":  exam_proximities,
+            "academic_events":   academic_events,
         }
 
 
@@ -330,7 +343,7 @@ async def student_calendar(
 
         # Tasks with due dates in range
         tasks = await _get(db, "student_tasks", {
-            "select":     "id,title,task_type,priority,due_at,course_code,status",
+            "select":     "id,title,task_type,priority,due_at,opens_at,closes_at,course_code,status",
             "student_id": f"eq.{student_id}",
             "tenant_id":  f"eq.{TENANT_ID}",
             "status":     "neq.cancelled",
@@ -385,6 +398,8 @@ async def create_task(student_id: str, body: TaskCreate):
         "priority":    body.priority,
     }
     if body.due_at:        payload["due_at"]       = body.due_at
+    if body.opens_at:      payload["opens_at"]     = body.opens_at
+    if body.closes_at:     payload["closes_at"]    = body.closes_at
     if body.course_code:   payload["course_code"]  = body.course_code
     if body.notes:         payload["notes"]        = body.notes
     if body.remind_at:     payload["remind_at"]    = body.remind_at
@@ -401,12 +416,14 @@ async def update_task(student_id: str, task_id: str, body: TaskUpdate):
         payload["status"] = body.status
         if body.status == "done":
             payload["acted_on_at"] = _now_iso()
-    if body.title is not None:       payload["title"]        = body.title
-    if body.priority is not None:    payload["priority"]     = body.priority
-    if body.due_at is not None:      payload["due_at"]       = body.due_at
-    if body.snoozed_until is not None: payload["snoozed_until"] = body.snoozed_until
-    if body.notes is not None:       payload["notes"]        = body.notes
-    if body.acted_on_at is not None: payload["acted_on_at"]  = body.acted_on_at
+    if body.title is not None:          payload["title"]        = body.title
+    if body.priority is not None:       payload["priority"]     = body.priority
+    if body.due_at is not None:         payload["due_at"]       = body.due_at
+    if body.opens_at is not None:       payload["opens_at"]     = body.opens_at
+    if body.closes_at is not None:      payload["closes_at"]    = body.closes_at
+    if body.snoozed_until is not None:  payload["snoozed_until"] = body.snoozed_until
+    if body.notes is not None:          payload["notes"]        = body.notes
+    if body.acted_on_at is not None:    payload["acted_on_at"]  = body.acted_on_at
 
     async with _db() as db:
         rows = await _patch(db, "student_tasks",

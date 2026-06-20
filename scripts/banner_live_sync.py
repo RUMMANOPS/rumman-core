@@ -9,7 +9,7 @@ Shared Banner logic (session, fetch, normalize, hash) lives in app/banner_client
 Default = dry-run (no DB writes). With --apply, performs ONE guarded sync:
 all guards must pass before any write; missing sections -> sync_status='not_seen' (never deleted).
 """
-import argparse, json, sys, hashlib
+import argparse, json, sys, hashlib, os
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import httpx
@@ -29,13 +29,19 @@ def now_iso(): return datetime.now(timezone.utc).isoformat()
 
 
 def load_supabase_env():
+    # Prefer process env (Railway injects vars; there is NO .env file in the deployed container).
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    if url and key:
+        return url, key
+    # Fallback: local .env file (developer machine only)
     env_path = Path(__file__).resolve().parent.parent / ".env"
-    url = key = None
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        if line.startswith("SUPABASE_URL="):
-            url = line.split("=", 1)[1].strip().strip('"').strip("'")
-        elif "service_role" in line.lower() and "=" in line and key is None:
-            key = line.split("=", 1)[1].strip().strip('"').strip("'")
+    if env_path.exists():
+        for line in env_path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("SUPABASE_URL=") and not url:
+                url = line.split("=", 1)[1].strip().strip('"').strip("'")
+            elif "service_role" in line.lower() and "=" in line and not key:
+                key = line.split("=", 1)[1].strip().strip('"').strip("'")
     return url, key
 
 

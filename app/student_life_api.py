@@ -151,7 +151,20 @@ class RegistrationApprove(BaseModel):
 
 
 class RegistrationPatch(BaseModel):
-    status:      str                = Field(..., description="approved|planned|dropped|needs_review")
+    status:      str                = Field(..., description="active|dropped|needs_review|approved|planned")
+
+
+class ConfirmBody(BaseModel):
+    # Student attests they completed the official Banner registration. RUMMAN never registers for them.
+    plan_id:      Optional[str]     = None   # defaults to the active pinned plan for the term
+    term_code:    Optional[str]     = None
+    acknowledged: bool              = Field(default=False, description="must be true: student confirms they registered in Banner themselves")
+
+
+class MarkFailedBody(BaseModel):
+    plan_id:      Optional[str]     = None   # defaults to the active pinned plan for the term
+    term_code:    Optional[str]     = None
+    reason:       Optional[str]     = None
 
 
 # ---------------------------------------------------------------------------
@@ -159,7 +172,7 @@ class RegistrationPatch(BaseModel):
 #   Onboarding is NEVER the source of active courses — only the approved schedule.
 # ---------------------------------------------------------------------------
 
-_VALID_REG_STATUS = {"approved", "planned", "dropped", "needs_review"}
+_VALID_REG_STATUS = {"active", "approved", "planned", "dropped", "needs_review"}
 
 
 async def _resolve_active_term(db: httpx.AsyncClient) -> Optional[str]:
@@ -191,15 +204,41 @@ async def registered_sections(
     student_id:      str,
     term:            Optional[str] = Query(default=None),
     include_dropped: bool          = Query(default=False),
+    confirmed_only:  bool          = Query(default=False,
+        description="When true, return ONLY sections of a CONFIRMED plan (source of truth for Courses/Today/Calendar)."),
 ):
     """
-    The student's APPROVED schedule = active courses. Returns raw sections (for
+    The student's schedule + a plan-lifecycle summary. Returns raw sections (for
     lectures/calendar) AND sections grouped into courses (for the Courses screen).
+
+    Lifecycle:
+      - plan.status pinned   = pre-confirmed in RUMMAN (NOT yet official) — shown by the
+        registration screen, but Courses/Today/Calendar must NOT treat it as registered.
+      - plan.status confirmed = student registered in Banner — the source of truth.
+    confirmed_only=true (used later by Courses/Today/Calendar) returns the schedule ONLY
+    when a confirmed plan exists; otherwise has_schedule=false.
     Empty schedule -> has_schedule=false (Courses screen shows the Smart-Registration CTA).
     """
     async with _db() as db:
         if term is None:
             term = await _resolve_active_term(db)
+        plan = await _get_active_plan(db, student_id, term) if term else None
+        plan_confirmed = bool(plan and plan.get("status") == "confirmed")
+
+        if confirmed_only and not plan_confirmed:
+            return {
+                "term_code":     term,
+                "has_schedule":  False,
+                "section_count": 0,
+                "course_count":  0,
+                "courses":       [],
+                "sections":      [],
+                "plan":          {"id": (plan["id"] if plan else None),
+                                  "status": (plan["status"] if plan else None),
+                                  "confirmed": False},
+                "confirmed_only": True,
+            }
+
         params: dict[str, Any] = {
             "select":     "*",
             "student_id": f"eq.{student_id}",
@@ -210,10 +249,20 @@ async def registered_sections(
             params["term_code"] = f"eq.{term}"
         if not include_dropped:
             params["status"] = "neq.dropped"
+        if confirmed_only and plan_confirmed:
+            params["plan_id"] = f"eq.{plan['id']}"
         rows = await _get(db, "student_registered_sections", params)
+
+    active_plan_id = plan["id"] if plan else None
+    active_plan_status = plan["status"] if plan else None
+
+    def _section_plan_status(r: dict) -> Optional[str]:
+        # Only sections linked to the current active plan inherit its lifecycle status.
+        return active_plan_status if (active_plan_id and r.get("plan_id") == active_plan_id) else None
 
     courses: dict[str, dict] = {}
     for r in rows:
+        r["plan_status"] = _section_plan_status(r)
         cc = r.get("course_code") or r.get("banner_course_code")
         c = courses.setdefault(cc, {
             "course_code":        cc,
@@ -231,6 +280,8 @@ async def registered_sections(
             "delivery_mode":  r.get("delivery_mode"),
             "campus":         r.get("campus"),
             "status":         r.get("status"),
+            "plan_id":        r.get("plan_id"),
+            "plan_status":    r.get("plan_status"),
         })
 
     return {
@@ -240,6 +291,12 @@ async def registered_sections(
         "course_count":  len(courses),
         "courses":       list(courses.values()),
         "sections":      rows,
+        "plan": {
+            "id":        active_plan_id,
+            "status":    active_plan_status,
+            "confirmed": plan_confirmed,
+        },
+        "confirmed_only": confirmed_only,
     }
 
 
@@ -310,14 +367,264 @@ async def validate_registration(student_id: str, body: RegistrationApprove):
     return {**val, "validated_at": _now_iso()}
 
 
-@router.post("/student/{student_id}/registration/approve")
-async def approve_registration(student_id: str, body: RegistrationApprove):
+# ── Conflict detection (pure, unit-testable) ──────────────────────────────────
+# class_meetings entries look like:
+#   {day, start_time "HH:MM", end_time "HH:MM", type, room, building, campus, start_date, end_date}
+# Online/asynchronous meetings carry null times -> they are skipped for conflict and warned.
+
+def _hhmm_to_min(t) -> Optional[int]:
+    if not t or not isinstance(t, str) or ":" not in t:
+        return None
+    try:
+        h, m = t.split(":")[:2]
+        return int(h) * 60 + int(m)
+    except Exception:
+        return None
+
+
+def _parse_meeting_date(s):
+    if not s or not isinstance(s, str):
+        return None
+    s = s.strip()
+    for fmt in ("%m/%d/%Y", "%Y-%m-%d", "%d/%m/%Y", "%m-%d-%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except Exception:
+            continue
+    return None
+
+
+def _date_ranges_overlap(a_start, a_end, b_start, b_end) -> bool:
+    # Missing dates -> assume overlap (conservative: never hide a real time clash).
+    if not (a_start and a_end and b_start and b_end):
+        return True
+    return a_start <= b_end and b_start <= a_end
+
+
+def _timed_meetings(section: dict) -> list[dict]:
+    """Meetings with a weekday AND both start/end times. Untimed/online meetings excluded."""
+    out = []
+    for m in (section.get("class_meetings") or []):
+        day = m.get("day")
+        s   = _hhmm_to_min(m.get("start_time"))
+        e   = _hhmm_to_min(m.get("end_time"))
+        if day and s is not None and e is not None and e > s:
+            out.append({
+                "day":        str(day).lower(),
+                "start":      s, "end": e,
+                "start_time": m.get("start_time"), "end_time": m.get("end_time"),
+                "start_date": _parse_meeting_date(m.get("start_date")),
+                "end_date":   _parse_meeting_date(m.get("end_date")),
+            })
+    return out
+
+
+def _conflict_check(sections: list[dict]) -> tuple[list[dict], list[dict]]:
+    """sections: hydrated term_sections rows (crn + class_meetings).
+    Conflict iff two CRNs share a weekday AND overlapping date-range AND overlapping time.
+    Returns (conflicts[], warnings[]). Sections with no timed meeting get a no_meeting_times warning."""
+    timed: dict[str, list[dict]] = {}
+    warnings: list[dict] = []
+    for s in sections:
+        crn = str(s.get("crn"))
+        tm  = _timed_meetings(s)
+        timed[crn] = tm
+        if not tm:
+            warnings.append({
+                "crn": crn, "reason": "no_meeting_times",
+                "message_ar": "تعذّر التحقق من تعارض هذه الشعبة (لا أوقات لقاء واضحة — قد تكون عن بُعد).",
+            })
+    conflicts: list[dict] = []
+    crns = list(timed.keys())
+    for i in range(len(crns)):
+        for j in range(i + 1, len(crns)):
+            for m1 in timed[crns[i]]:
+                for m2 in timed[crns[j]]:
+                    if m1["day"] != m2["day"]:
+                        continue
+                    if not _date_ranges_overlap(m1["start_date"], m1["end_date"],
+                                                m2["start_date"], m2["end_date"]):
+                        continue
+                    if m1["start"] < m2["end"] and m2["start"] < m1["end"]:
+                        conflicts.append({
+                            "crn_a": crns[i], "crn_b": crns[j], "day": m1["day"],
+                            "a": [m1["start_time"], m1["end_time"]],
+                            "b": [m2["start_time"], m2["end_time"]],
+                        })
+    return conflicts, warnings
+
+
+# ── Plan helpers ──────────────────────────────────────────────────────────────
+
+async def _get_active_plan(db: httpx.AsyncClient, student_id: str, term: Optional[str]) -> Optional[dict]:
+    """The single active plan (pinned OR confirmed) for the term — guaranteed unique by index."""
+    if not term:
+        return None
+    rows = await _get(db, "student_registration_plans", {
+        "select":     "*",
+        "student_id": f"eq.{student_id}",
+        "term_code":  f"eq.{term}",
+        "status":     "in.(pinned,confirmed)",
+        "order":      "created_at.desc",
+        "limit":      "1",
+    })
+    return rows[0] if rows else None
+
+
+async def _get_plan_by_id(db: httpx.AsyncClient, student_id: str, plan_id: str) -> Optional[dict]:
+    rows = await _get(db, "student_registration_plans", {
+        "select": "*", "id": f"eq.{plan_id}", "student_id": f"eq.{student_id}", "limit": "1",
+    })
+    return rows[0] if rows else None
+
+
+async def _pin_core(db: httpx.AsyncClient, student_id: str, crns: list[str], term: str) -> dict:
     """
-    Approve a Smart-Registration schedule. Client sends ONLY CRNs; every field is
-    hydrated from term_sections (source of truth). Idempotent upsert on
-    (student_id, term_code, crn). Previously-approved CRNs absent from the new set
-    become 'dropped' (soft — never hard-deleted).
-    A LIVE Banner re-check runs first; closed/full/missing -> 409, Banner down -> 503.
+    Shared PIN logic — used by /registration/pin and the deprecated /registration/approve alias.
+    PIN = pre-confirmation INSIDE RUMMAN (live-rechecked + conflict-free). NOT official registration.
+    Order: live availability re-check (fail-closed) -> hydrate -> conflict-check ->
+           active-plan policy -> supersede prior pinned -> create pinned plan -> link active sections.
+    Raises HTTPException on any gate. ALL validation happens BEFORE any write.
+    """
+    crn_csv = ",".join(crns)
+
+    # 1. LIVE availability re-check — fail-closed, no silent fallback to stale sync.
+    val = await _revalidate_live(db, term, crns, persist=True)
+    if not val.get("live_checked"):
+        raise HTTPException(503, detail=val)
+    if not val.get("ok"):
+        raise HTTPException(409, detail=val)
+
+    # 2. Hydrate from term_sections — the source of truth.
+    secs = await _get(db, "term_sections", {
+        "select":    "crn,subject_course,section_number,course_name,credit_hours,"
+                     "campus,delivery_mode,class_meetings,import_version",
+        "term_code": f"eq.{term}",
+        "crn":       f"in.({crn_csv})",
+        "limit":     "500",
+    })
+    found = {str(s["crn"]) for s in secs}
+    missing = [c for c in crns if c not in found]
+    if missing:
+        raise HTTPException(400, detail=f"CRNs not found in term_sections for term {term}: {missing}")
+
+    # 3. Conflict-check (time clash between chosen sections). Missing times -> warn, not block.
+    conflicts, warnings = _conflict_check(secs)
+    if conflicts:
+        raise HTTPException(409, detail={
+            "reason": "schedule_conflict", "conflicts": conflicts,
+            "message_ar": "هناك تعارض في المواعيد بين الشعب المختارة. عدّل الاختيار وأعد المحاولة.",
+        })
+
+    # 4. Active-plan policy: never silently replace a CONFIRMED plan.
+    active_plan = await _get_active_plan(db, student_id, term)
+    if active_plan and active_plan.get("status") == "confirmed":
+        raise HTTPException(409, detail={
+            "reason": "confirmed_plan_exists", "plan_id": active_plan["id"],
+            "message_ar": "لديك تسجيل مؤكَّد لهذا الفصل. لتعديله استخدم إعادة الجدولة لاحقًا (replace).",
+        })
+
+    now = _now_iso()
+
+    # 5. Supersede a prior PINNED plan first (frees the partial-unique slot before insert).
+    if active_plan and active_plan.get("status") == "pinned":
+        await _patch(db, "student_registration_plans", {"id": active_plan["id"]},
+                     {"status": "superseded", "superseded_at": now, "updated_at": now})
+
+    # 6. Create the new pinned plan.
+    plan = await _post(db, "student_registration_plans", {
+        "student_id":      student_id,
+        "tenant_id":       TENANT_ID,
+        "term_code":       term,
+        "status":          "pinned",
+        "source":          "smart_registration",
+        "crns":            crns,
+        "prevalidated_at": now,
+        "pinned_at":       now,
+        "metadata":        {"warnings": warnings},
+    })
+    plan_id = plan.get("id")
+
+    # 7. Upsert chosen sections as ACTIVE, linked to the plan.
+    rows = [{
+        "student_id":            student_id,
+        "tenant_id":             TENANT_ID,
+        "term_code":             term,
+        "crn":                   str(s["crn"]),
+        "section_number":        s.get("section_number"),
+        "banner_course_code":    s.get("subject_course"),   # raw Banner code, never lost
+        "canonical_course_code": None,                      # resolved later via course_aliases
+        "course_code":           s.get("subject_course"),   # app-facing; temporarily = banner
+        "course_name":           s.get("course_name"),
+        "credit_hours":          s.get("credit_hours"),
+        "campus":                s.get("campus"),
+        "delivery_mode":         s.get("delivery_mode"),
+        "class_meetings":        s.get("class_meetings"),
+        "import_version":        s.get("import_version"),
+        "status":                "active",
+        "source":                "smart_registration",
+        "plan_id":               plan_id,
+        "approved_at":           now,
+        "updated_at":            now,
+    } for s in secs]
+    ru = await db.post(
+        "/student_registered_sections?on_conflict=student_id,term_code,crn",
+        json=rows,
+        headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+    )
+    if ru.status_code not in (200, 201):
+        raise HTTPException(ru.status_code, detail=ru.text[:300])
+
+    # 8. Soft-drop previously-active sections no longer chosen (never hard-deleted).
+    dropped = 0
+    rd = await db.patch(
+        "/student_registered_sections",
+        params={
+            "student_id": f"eq.{student_id}",
+            "term_code":  f"eq.{term}",
+            "status":     "eq.active",
+            "crn":        f"not.in.({crn_csv})",
+        },
+        json={"status": "dropped", "updated_at": now},
+    )
+    if rd.status_code in (200, 204):
+        try:
+            dropped = len(rd.json())
+        except Exception:
+            dropped = 0
+
+    # Best-effort lifecycle event (non-fatal).
+    try:
+        await _post(db, "student_history", {
+            "student_id": student_id,
+            "tenant_id":  TENANT_ID,
+            "event_type": "registration_pinned",
+            "event_data": {"term_code": term, "plan_id": plan_id,
+                           "pinned_crns": crns, "dropped": dropped, "warnings": warnings},
+        })
+    except Exception:
+        pass
+
+    return {
+        "term_code":    term,
+        "plan_id":      plan_id,
+        "plan_status":  "pinned",
+        "pinned_count": len(rows),
+        "pinned_crns":  crns,
+        "dropped_count": dropped,
+        "warnings":     warnings,
+        "live":         {"checked": val.get("live_checked"),
+                         "cache_age_seconds": val.get("cache_age_seconds")},
+    }
+
+
+@router.post("/student/{student_id}/registration/pin")
+async def pin_registration(student_id: str, body: RegistrationApprove):
+    """
+    PIN a Smart-Registration plan: pre-confirmation INSIDE RUMMAN after a LIVE Banner
+    re-check + conflict-check. This is NOT official registration — the student must still
+    register in Banner, then call /confirm. Closed/full/missing -> 409, Banner down -> 503,
+    schedule conflict -> 409. Client sends ONLY CRNs (server hydrates from term_sections).
     """
     raw  = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
     crns = list(dict.fromkeys(raw))
@@ -325,100 +632,194 @@ async def approve_registration(student_id: str, body: RegistrationApprove):
         raise HTTPException(400, detail="no crns provided")
     if len(crns) != len(raw):
         raise HTTPException(400, detail="duplicate CRNs in request")
-    crn_csv = ",".join(crns)
-
     async with _db() as db:
         term = body.term_code or await _resolve_active_term(db)
         if not term:
             raise HTTPException(400, detail="no active term configured")
+        result = await _pin_core(db, student_id, crns, term)
+    return {**result, "pinned_at": _now_iso()}
 
-        # LIVE pre-approval re-check — fail-closed, no silent fallback to stale sync.
-        # persist=True: approve refreshes the chosen CRNs + records a pre_approval run.
-        val = await _revalidate_live(db, term, crns, persist=True)
-        if not val.get("live_checked"):
-            raise HTTPException(503, detail=val)
-        if not val.get("ok"):
-            raise HTTPException(409, detail=val)
 
-        # Hydrate from term_sections — the source of truth
-        secs = await _get(db, "term_sections", {
-            "select":    "crn,subject_course,section_number,course_name,credit_hours,"
-                         "campus,delivery_mode,class_meetings,import_version",
-            "term_code": f"eq.{term}",
-            "crn":       f"in.({crn_csv})",
-            "limit":     "500",
+@router.post("/student/{student_id}/registration/approve", deprecated=True)
+async def approve_registration(student_id: str, body: RegistrationApprove):
+    """
+    DEPRECATED alias for /registration/pin. 'approve' historically meant "officially
+    registered", which is WRONG — pinning is pre-confirmation, not Banner registration.
+    Kept as a thin alias (single code path) so the current mobile build keeps working
+    until it migrates to /pin + /confirm. Returns a superset: legacy approved_* keys
+    plus the new plan_id / plan_status.
+    """
+    raw  = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
+    crns = list(dict.fromkeys(raw))
+    if not crns:
+        raise HTTPException(400, detail="no crns provided")
+    if len(crns) != len(raw):
+        raise HTTPException(400, detail="duplicate CRNs in request")
+    async with _db() as db:
+        term = body.term_code or await _resolve_active_term(db)
+        if not term:
+            raise HTTPException(400, detail="no active term configured")
+        result = await _pin_core(db, student_id, crns, term)
+    return {
+        "term_code":      result["term_code"],
+        # legacy keys (kept for the current mobile build)
+        "approved_count": result["pinned_count"],
+        "approved_crns":  result["pinned_crns"],
+        "dropped_count":  result["dropped_count"],
+        # new lifecycle keys
+        "plan_id":        result["plan_id"],
+        "plan_status":    result["plan_status"],
+        "pinned_count":   result["pinned_count"],
+        "pinned_crns":    result["pinned_crns"],
+        "warnings":       result["warnings"],
+        "deprecated":     "use /registration/pin then /registration/confirm",
+    }
+
+
+@router.post("/student/{student_id}/registration/confirm")
+async def confirm_registration(student_id: str, body: ConfirmBody):
+    """
+    Confirm that the student completed the OFFICIAL Banner registration themselves.
+    Requires acknowledged=true (RUMMAN never registers on their behalf). NO live rejection —
+    the seat may already be theirs. Transitions the pinned plan -> confirmed. Idempotent if
+    already confirmed. From this point the plan is the source of truth for Courses/Today/Calendar.
+    """
+    if not body.acknowledged:
+        raise HTTPException(400, detail={
+            "reason": "acknowledgment_required",
+            "message_ar": "يجب أن تؤكّد أنك أكملت التسجيل في النظام الرسمي (Banner). رمان لا يسجّل نيابةً عنك.",
         })
-        found = {str(s["crn"]) for s in secs}
-        missing = [c for c in crns if c not in found]
-        if missing:
-            raise HTTPException(400, detail=f"CRNs not found in term_sections for term {term}: {missing}")
-
+    async with _db() as db:
+        term = body.term_code or await _resolve_active_term(db)
+        plan = (await _get_plan_by_id(db, student_id, body.plan_id)
+                if body.plan_id else await _get_active_plan(db, student_id, term))
+        if not plan:
+            raise HTTPException(409, detail={
+                "reason": "no_plan_to_confirm",
+                "message_ar": "لا توجد خطة مثبّتة لتأكيدها. ثبّت جدولك أولًا.",
+            })
+        if plan.get("status") == "confirmed":
+            return {"plan_id": plan["id"], "plan_status": "confirmed",
+                    "confirmed_at": plan.get("confirmed_at"),
+                    "term_code": plan.get("term_code"), "idempotent": True}
+        if plan.get("status") != "pinned":
+            raise HTTPException(409, detail={
+                "reason": "plan_not_pinned", "current_status": plan.get("status"),
+                "message_ar": "لا يمكن تأكيد هذه الخطة في حالتها الحالية.",
+            })
         now = _now_iso()
-        rows = [{
-            "student_id":            student_id,
-            "tenant_id":             TENANT_ID,
-            "term_code":             term,
-            "crn":                   str(s["crn"]),
-            "section_number":        s.get("section_number"),
-            "banner_course_code":    s.get("subject_course"),   # raw Banner code, never lost
-            "canonical_course_code": None,                      # resolved later via course_aliases
-            "course_code":           s.get("subject_course"),   # app-facing; temporarily = banner
-            "course_name":           s.get("course_name"),
-            "credit_hours":          s.get("credit_hours"),
-            "campus":                s.get("campus"),
-            "delivery_mode":         s.get("delivery_mode"),
-            "class_meetings":        s.get("class_meetings"),
-            "import_version":        s.get("import_version"),
-            "status":                "approved",
-            "source":                "smart_registration",
-            "approved_at":           now,
-            "updated_at":            now,
-        } for s in secs]
-
-        # Idempotent upsert
-        ru = await db.post(
-            "/student_registered_sections?on_conflict=student_id,term_code,crn",
-            json=rows,
-            headers={"Prefer": "resolution=merge-duplicates,return=representation"},
-        )
-        if ru.status_code not in (200, 201):
-            raise HTTPException(ru.status_code, detail=ru.text[:300])
-
-        # Soft-drop previously-approved CRNs no longer in the selection
-        dropped = 0
-        rd = await db.patch(
-            "/student_registered_sections",
-            params={
-                "student_id": f"eq.{student_id}",
-                "term_code":  f"eq.{term}",
-                "status":     "eq.approved",
-                "crn":        f"not.in.({crn_csv})",
-            },
-            json={"status": "dropped", "updated_at": now},
-        )
-        if rd.status_code in (200, 204):
-            try:
-                dropped = len(rd.json())
-            except Exception:
-                dropped = 0
-
-        # Best-effort time-asset event (non-fatal)
+        await _patch(db, "student_registration_plans", {"id": plan["id"]},
+                     {"status": "confirmed", "confirmed_at": now, "updated_at": now})
         try:
             await _post(db, "student_history", {
-                "student_id": student_id,
-                "tenant_id":  TENANT_ID,
-                "event_type": "registration_plan_built",
-                "event_data": {"term_code": term, "approved_crns": crns, "dropped": dropped},
+                "student_id": student_id, "tenant_id": TENANT_ID,
+                "event_type": "university_registration_confirmed",
+                "event_data": {"term_code": plan.get("term_code"), "plan_id": plan["id"]},
             })
         except Exception:
             pass
+    return {"plan_id": plan["id"], "plan_status": "confirmed", "confirmed_at": now,
+            "term_code": plan.get("term_code"), "idempotent": False}
 
-    return {
-        "term_code":      term,
-        "approved_count": len(rows),
-        "approved_crns":  crns,
-        "dropped_count":  dropped,
-    }
+
+@router.post("/student/{student_id}/registration/mark-failed")
+async def mark_registration_failed(student_id: str, body: MarkFailedBody):
+    """
+    The student tried to register in Banner and could NOT (e.g. a section filled before they
+    finished). Transitions the pinned plan -> registration_failed, preserves its sections as
+    needs_review (never deleted), and frees the active-plan slot so a fresh /pin is allowed.
+    """
+    async with _db() as db:
+        term = body.term_code or await _resolve_active_term(db)
+        plan = (await _get_plan_by_id(db, student_id, body.plan_id)
+                if body.plan_id else await _get_active_plan(db, student_id, term))
+        if not plan or plan.get("status") != "pinned":
+            raise HTTPException(409, detail={
+                "reason": "no_pinned_plan",
+                "message_ar": "لا توجد خطة مثبّتة لتسجيل فشلها.",
+            })
+        now = _now_iso()
+        meta = dict(plan.get("metadata") or {})
+        if body.reason:
+            meta["failure_reason"] = str(body.reason)[:500]
+        await _patch(db, "student_registration_plans", {"id": plan["id"]},
+                     {"status": "registration_failed", "failed_at": now,
+                      "metadata": meta, "updated_at": now})
+        # Preserve the sections, flag for review (never hard-deleted).
+        reviewed = 0
+        rr = await db.patch(
+            "/student_registered_sections",
+            params={"student_id": f"eq.{student_id}",
+                    "plan_id":    f"eq.{plan['id']}",
+                    "status":     "eq.active"},
+            json={"status": "needs_review", "updated_at": now},
+        )
+        if rr.status_code in (200, 204):
+            try:
+                reviewed = len(rr.json())
+            except Exception:
+                reviewed = 0
+        try:
+            await _post(db, "student_history", {
+                "student_id": student_id, "tenant_id": TENANT_ID,
+                "event_type": "university_registration_failed",
+                "event_data": {"term_code": plan.get("term_code"), "plan_id": plan["id"],
+                               "reason": body.reason},
+            })
+        except Exception:
+            pass
+    return {"plan_id": plan["id"], "plan_status": "registration_failed", "failed_at": now,
+            "sections_needs_review": reviewed, "term_code": plan.get("term_code")}
+
+
+@router.get("/student/{student_id}/registration/plan")
+async def get_registration_plan(
+    student_id: str,
+    term:    Optional[str] = Query(default=None),
+    history: bool          = Query(default=False, description="include superseded/failed/abandoned plans"),
+):
+    """The student's current active registration plan (pinned OR confirmed) with its sections.
+    Side states (superseded/registration_failed/abandoned) are hidden unless history=true."""
+    async with _db() as db:
+        if term is None:
+            term = await _resolve_active_term(db)
+        plan = await _get_active_plan(db, student_id, term) if term else None
+        sections: list[dict] = []
+        if plan:
+            sections = await _get(db, "student_registered_sections", {
+                "select":     "*",
+                "student_id": f"eq.{student_id}",
+                "plan_id":    f"eq.{plan['id']}",
+                "status":     "neq.dropped",
+                "order":      "course_code.asc,crn.asc",
+                "limit":      "500",
+            })
+        result: dict[str, Any] = {
+            "term_code": term,
+            "has_plan":  plan is not None,
+            "plan": ({
+                "id":           plan["id"],
+                "status":       plan["status"],
+                "confirmed":    plan["status"] == "confirmed",
+                "crns":         plan.get("crns"),
+                "pinned_at":    plan.get("pinned_at"),
+                "confirmed_at": plan.get("confirmed_at"),
+                "warnings":     (plan.get("metadata") or {}).get("warnings", []),
+            } if plan else None),
+            "sections": sections,
+        }
+        if history:
+            hist_params: dict[str, Any] = {
+                "select":     "id,status,crns,pinned_at,confirmed_at,failed_at,superseded_at,abandoned_at,created_at",
+                "student_id": f"eq.{student_id}",
+                "status":     "in.(registration_failed,superseded,abandoned,needs_review)",
+                "order":      "created_at.desc",
+                "limit":      "50",
+            }
+            if term:
+                hist_params["term_code"] = f"eq.{term}"
+            result["history"] = await _get(db, "student_registration_plans", hist_params)
+        return result
 
 
 @router.patch("/student/{student_id}/registration/{crn}")

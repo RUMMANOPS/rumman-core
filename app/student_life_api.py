@@ -140,6 +140,229 @@ class RequestUpdate(BaseModel):
     conversation_turn:  Optional[dict] = None   # {role, content}
 
 
+class RegistrationApprove(BaseModel):
+    # Client sends ONLY the chosen CRNs. All section data is hydrated server-side
+    # from term_sections (the source of truth) — mobile-sent fields are NOT trusted.
+    crns:        list[str]          = Field(..., description="CRNs the student approved")
+    term_code:   Optional[str]      = None   # defaults to app_term_config.active_term_code
+
+
+class RegistrationPatch(BaseModel):
+    status:      str                = Field(..., description="approved|planned|dropped|needs_review")
+
+
+# ---------------------------------------------------------------------------
+# Active Courses / Registration  (ACTIVE_COURSES_SOURCE = student_registered_sections)
+#   Onboarding is NEVER the source of active courses — only the approved schedule.
+# ---------------------------------------------------------------------------
+
+_VALID_REG_STATUS = {"approved", "planned", "dropped", "needs_review"}
+
+
+async def _resolve_active_term(db: httpx.AsyncClient) -> Optional[str]:
+    rows = await _get(db, "app_term_config", {
+        "select":    "active_term_code",
+        "tenant_id": f"eq.{TENANT_ID}",
+        "limit":     "1",
+    })
+    return rows[0]["active_term_code"] if rows else None
+
+
+@router.get("/config/active-term")
+async def get_active_term():
+    """The currently active term — mobile reads this instead of a hardcoded TERM_CODE."""
+    async with _db() as db:
+        rows = await _get(db, "app_term_config", {
+            "select":    "active_term_code,active_term_label,source_url,source_term_label,"
+                         "import_version,last_imported_at,last_verified_at",
+            "tenant_id": f"eq.{TENANT_ID}",
+            "limit":     "1",
+        })
+    if not rows:
+        raise HTTPException(404, detail="no active term configured")
+    return rows[0]
+
+
+@router.get("/student/{student_id}/registered-sections")
+async def registered_sections(
+    student_id:      str,
+    term:            Optional[str] = Query(default=None),
+    include_dropped: bool          = Query(default=False),
+):
+    """
+    The student's APPROVED schedule = active courses. Returns raw sections (for
+    lectures/calendar) AND sections grouped into courses (for the Courses screen).
+    Empty schedule -> has_schedule=false (Courses screen shows the Smart-Registration CTA).
+    """
+    async with _db() as db:
+        if term is None:
+            term = await _resolve_active_term(db)
+        params: dict[str, Any] = {
+            "select":     "*",
+            "student_id": f"eq.{student_id}",
+            "order":      "course_code.asc,crn.asc",
+            "limit":      "500",
+        }
+        if term:
+            params["term_code"] = f"eq.{term}"
+        if not include_dropped:
+            params["status"] = "neq.dropped"
+        rows = await _get(db, "student_registered_sections", params)
+
+    courses: dict[str, dict] = {}
+    for r in rows:
+        cc = r.get("course_code") or r.get("banner_course_code")
+        c = courses.setdefault(cc, {
+            "course_code":        cc,
+            "banner_course_code": r.get("banner_course_code"),
+            "course_name":        r.get("course_name"),
+            "credit_hours":       r.get("credit_hours"),
+            "crns":               [],
+            "sections":           [],
+        })
+        c["crns"].append(r.get("crn"))
+        c["sections"].append({
+            "crn":            r.get("crn"),
+            "section_number": r.get("section_number"),
+            "class_meetings": r.get("class_meetings"),
+            "delivery_mode":  r.get("delivery_mode"),
+            "campus":         r.get("campus"),
+            "status":         r.get("status"),
+        })
+
+    return {
+        "term_code":     term,
+        "has_schedule":  len(rows) > 0,
+        "section_count": len(rows),
+        "course_count":  len(courses),
+        "courses":       list(courses.values()),
+        "sections":      rows,
+    }
+
+
+@router.post("/student/{student_id}/registration/approve")
+async def approve_registration(student_id: str, body: RegistrationApprove):
+    """
+    Approve a Smart-Registration schedule. Client sends ONLY CRNs; every field is
+    hydrated from term_sections (source of truth). Idempotent upsert on
+    (student_id, term_code, crn). Previously-approved CRNs absent from the new set
+    become 'dropped' (soft — never hard-deleted).
+    """
+    crns = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
+    if not crns:
+        raise HTTPException(400, detail="no crns provided")
+    crn_csv = ",".join(crns)
+
+    async with _db() as db:
+        term = body.term_code or await _resolve_active_term(db)
+        if not term:
+            raise HTTPException(400, detail="no active term configured")
+
+        # Hydrate from term_sections — the source of truth
+        secs = await _get(db, "term_sections", {
+            "select":    "crn,subject_course,section_number,course_name,credit_hours,"
+                         "campus,delivery_mode,class_meetings,import_version",
+            "term_code": f"eq.{term}",
+            "crn":       f"in.({crn_csv})",
+            "limit":     "500",
+        })
+        found = {str(s["crn"]) for s in secs}
+        missing = [c for c in crns if c not in found]
+        if missing:
+            raise HTTPException(400, detail=f"CRNs not found in term_sections for term {term}: {missing}")
+
+        now = _now_iso()
+        rows = [{
+            "student_id":            student_id,
+            "tenant_id":             TENANT_ID,
+            "term_code":             term,
+            "crn":                   str(s["crn"]),
+            "section_number":        s.get("section_number"),
+            "banner_course_code":    s.get("subject_course"),   # raw Banner code, never lost
+            "canonical_course_code": None,                      # resolved later via course_aliases
+            "course_code":           s.get("subject_course"),   # app-facing; temporarily = banner
+            "course_name":           s.get("course_name"),
+            "credit_hours":          s.get("credit_hours"),
+            "campus":                s.get("campus"),
+            "delivery_mode":         s.get("delivery_mode"),
+            "class_meetings":        s.get("class_meetings"),
+            "import_version":        s.get("import_version"),
+            "status":                "approved",
+            "source":                "smart_registration",
+            "approved_at":           now,
+            "updated_at":            now,
+        } for s in secs]
+
+        # Idempotent upsert
+        ru = await db.post(
+            "/student_registered_sections?on_conflict=student_id,term_code,crn",
+            json=rows,
+            headers={"Prefer": "resolution=merge-duplicates,return=representation"},
+        )
+        if ru.status_code not in (200, 201):
+            raise HTTPException(ru.status_code, detail=ru.text[:300])
+
+        # Soft-drop previously-approved CRNs no longer in the selection
+        dropped = 0
+        rd = await db.patch(
+            "/student_registered_sections",
+            params={
+                "student_id": f"eq.{student_id}",
+                "term_code":  f"eq.{term}",
+                "status":     "eq.approved",
+                "crn":        f"not.in.({crn_csv})",
+            },
+            json={"status": "dropped", "updated_at": now},
+        )
+        if rd.status_code in (200, 204):
+            try:
+                dropped = len(rd.json())
+            except Exception:
+                dropped = 0
+
+        # Best-effort time-asset event (non-fatal)
+        try:
+            await _post(db, "student_history", {
+                "student_id": student_id,
+                "tenant_id":  TENANT_ID,
+                "event_type": "registration_plan_built",
+                "event_data": {"term_code": term, "approved_crns": crns, "dropped": dropped},
+            })
+        except Exception:
+            pass
+
+    return {
+        "term_code":      term,
+        "approved_count": len(rows),
+        "approved_crns":  crns,
+        "dropped_count":  dropped,
+    }
+
+
+@router.patch("/student/{student_id}/registration/{crn}")
+async def patch_registration(
+    student_id: str,
+    crn:        str,
+    body:       RegistrationPatch,
+    term_code:  Optional[str] = Query(default=None),
+):
+    """Change a single registered section's status. CRN is unique only within a term,
+    so term_code is required (defaults to the active term)."""
+    if body.status not in _VALID_REG_STATUS:
+        raise HTTPException(400, detail=f"invalid status; must be one of {sorted(_VALID_REG_STATUS)}")
+    async with _db() as db:
+        if not term_code:
+            term_code = await _resolve_active_term(db)
+        filters = {"student_id": student_id, "crn": crn}
+        if term_code:
+            filters["term_code"] = term_code
+        updated = await _patch(db, "student_registered_sections", filters,
+                               {"status": body.status, "updated_at": _now_iso()})
+    if not updated:
+        raise HTTPException(404, detail="registered section not found")
+    return updated[0]
+
+
 # ---------------------------------------------------------------------------
 # Home Command Center
 # ---------------------------------------------------------------------------

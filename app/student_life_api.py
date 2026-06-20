@@ -21,6 +21,7 @@ Endpoints for the Student Life OS:
 from __future__ import annotations
 
 import os
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
@@ -28,6 +29,8 @@ import httpx
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
+
+from app import banner_client
 
 load_dotenv()
 
@@ -240,6 +243,73 @@ async def registered_sections(
     }
 
 
+# ── Live pre-approval re-check (APPROVE-REVALIDATION-1) ───────────────────────
+# Banner does NOT support CRN-level filtering, so we fetch ALL sections (short-TTL
+# cached) and filter the requested CRNs in memory. Fail-closed: no silent fallback.
+
+async def _persist_pre_approval(db: httpx.AsyncClient, term: str, chosen_norm: list[dict], total):
+    """Upsert the freshly re-checked CRNs into term_sections + record a pre_approval sync run."""
+    if not chosen_norm:
+        return
+    now = _now_iso()
+    run = await _post(db, "banner_sync_runs", {
+        "tenant_id": TENANT_ID, "term_code": term, "status": "completed", "trigger": "pre_approval",
+        "source_total_count": total, "sections_seen": len(chosen_norm),
+        "started_at": now, "finished_at": now,
+    })
+    run_id = run.get("id") if isinstance(run, dict) else None
+    rows = []
+    for n in chosen_norm:
+        rec = dict(n)
+        rec.update({"sync_status": "active", "is_active": True, "sync_run_id": run_id,
+                    "last_checked_at": now, "last_seen_at": now, "raw_changed_at": now})
+        rows.append(rec)
+    await db.post("/term_sections?on_conflict=term_code,crn", json=rows,
+                  headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+
+
+async def _revalidate_live(db: httpx.AsyncClient, term: str, crns: list[str], persist: bool = False) -> dict:
+    """Live Banner re-check of the given CRNs. Never raises — returns a result dict.
+    persist=False (default, used by /validate) => pure read, NO DB write.
+    persist=True (used by /approve) => best-effort refresh of the chosen CRNs + pre_approval run."""
+    try:
+        normalized, total, cache_age, _did = await asyncio.to_thread(banner_client.get_live_sections, term)
+    except banner_client.BannerUnavailable as exc:
+        return {"live_checked": False, "ok": False, "term_code": term, "cache_age_seconds": None,
+                "sections": [], "failed_crns": crns,
+                "message_ar": "تعذّر التحقق اللحظي من توفّر الشعب. حاول مرة أخرى بعد قليل.",
+                "error": str(exc)[:160]}
+    live_map = {n["crn"]: n for n in normalized}
+    ok, sections, failed = banner_client.evaluate_crns(crns, live_map)
+    if persist:
+        chosen = [live_map[c] for c in crns if c in live_map]
+        try:
+            await _persist_pre_approval(db, term, chosen, total)
+        except Exception:
+            pass  # persistence is best-effort; the safety verdict comes from live data, not the DB write
+    return {"live_checked": True, "ok": ok, "term_code": term,
+            "cache_age_seconds": round(cache_age, 1), "sections": sections, "failed_crns": failed,
+            "message_ar": None if ok else "بعض الشعب امتلأت أو أُغلقت للتو. حدّث الشعب وأعد توليد الجدول."}
+
+
+@router.post("/student/{student_id}/registration/validate")
+async def validate_registration(student_id: str, body: RegistrationApprove):
+    """Live availability check for a set of CRNs. Always returns 200; ok=false carries reasons.
+    approve() calls this SAME logic internally — validation cannot be bypassed."""
+    raw  = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
+    crns = list(dict.fromkeys(raw))
+    if not crns:
+        raise HTTPException(400, detail="no crns provided")
+    if len(crns) != len(raw):
+        raise HTTPException(400, detail="duplicate CRNs in request")
+    async with _db() as db:
+        term = body.term_code or await _resolve_active_term(db)
+        if not term:
+            raise HTTPException(400, detail="no active term configured")
+        val = await _revalidate_live(db, term, crns)
+    return {**val, "validated_at": _now_iso()}
+
+
 @router.post("/student/{student_id}/registration/approve")
 async def approve_registration(student_id: str, body: RegistrationApprove):
     """
@@ -247,16 +317,28 @@ async def approve_registration(student_id: str, body: RegistrationApprove):
     hydrated from term_sections (source of truth). Idempotent upsert on
     (student_id, term_code, crn). Previously-approved CRNs absent from the new set
     become 'dropped' (soft — never hard-deleted).
+    A LIVE Banner re-check runs first; closed/full/missing -> 409, Banner down -> 503.
     """
-    crns = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
+    raw  = [str(c).strip() for c in (body.crns or []) if str(c).strip()]
+    crns = list(dict.fromkeys(raw))
     if not crns:
         raise HTTPException(400, detail="no crns provided")
+    if len(crns) != len(raw):
+        raise HTTPException(400, detail="duplicate CRNs in request")
     crn_csv = ",".join(crns)
 
     async with _db() as db:
         term = body.term_code or await _resolve_active_term(db)
         if not term:
             raise HTTPException(400, detail="no active term configured")
+
+        # LIVE pre-approval re-check — fail-closed, no silent fallback to stale sync.
+        # persist=True: approve refreshes the chosen CRNs + records a pre_approval run.
+        val = await _revalidate_live(db, term, crns, persist=True)
+        if not val.get("live_checked"):
+            raise HTTPException(503, detail=val)
+        if not val.get("ok"):
+            raise HTTPException(409, detail=val)
 
         # Hydrate from term_sections — the source of truth
         secs = await _get(db, "term_sections", {

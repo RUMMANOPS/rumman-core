@@ -10,7 +10,7 @@ Default = dry-run (no DB writes). With --apply, performs ONE guarded sync:
 all guards must pass before any write; missing sections -> sync_status='not_seen' (never deleted).
 """
 import argparse, json, sys, hashlib
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import httpx
 
@@ -74,13 +74,13 @@ def parse_envelope(normalized):
     return s, e
 
 
-def run_apply(url, key, normalized, supa_current, total, http_ok):
+def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manual"):
     now = now_iso()
     live = {n["crn"] for n in normalized}
     with httpx.Client(timeout=30, headers=sb_headers(key, "return=representation")) as c:
         r = c.post(f"{url}/rest/v1/banner_sync_runs", json={
             "tenant_id": TENANT_ID, "term_code": TERM_CODE, "status": "running",
-            "trigger": "manual", "source_total_count": total, "started_at": now})
+            "trigger": trigger, "source_total_count": total, "started_at": now})
         r.raise_for_status(); run_id = r.json()[0]["id"]
     log(f"  sync_run_id = {run_id}")
 
@@ -126,11 +126,21 @@ def run_apply(url, key, normalized, supa_current, total, http_ok):
     return run_id, added, updated, not_seen, (s, e)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--apply", action="store_true")
-    args = ap.parse_args()
+def _running_lock_held(url, key, term, stale_seconds):
+    """Row-based mutex: True if a fresh banner_sync_runs row is still 'running' for this term.
+    (A true pg_advisory_lock needs a direct PG session; our stack is PostgREST-only, so we use
+    a DB-row mutex — sufficient for the single-instance serial worker.)"""
+    cutoff = (datetime.now(timezone.utc) - timedelta(seconds=stale_seconds)).isoformat()
+    with httpx.Client(timeout=20, headers=sb_headers(key)) as c:
+        r = c.get(f"{url}/rest/v1/banner_sync_runs", params={
+            "select": "id", "term_code": f"eq.{term}", "status": "eq.running",
+            "started_at": f"gte.{cutoff}", "limit": "1"})
+        return r.status_code == 200 and len(r.json()) > 0
 
+
+def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
+    """One guarded sync cycle. Shared by the CLI (--apply) and app/banner_sync_worker.py.
+    Returns a result dict; never raises (Banner failure -> {'ok': False, 'reason': 'banner_unavailable'})."""
     usid = "rmnsync" + hashlib.md5(TERM_CODE.encode()).hexdigest()[:8]
     try:
         c = banner_client._open_session()
@@ -139,26 +149,20 @@ def main():
             tmap = {t.get("code"): t.get("description") for t in terms}
             summer = tmap.get(TERM_CODE)
             term_ok = bool(summer and "summer" in summer.lower())
-            log(f"term discovery: 202550 -> {summer!r} | confirmed={term_ok}")
             bind_term(c, TERM_CODE, usid)
             rows, total, http_ok = fetch_all_sections(c, TERM_CODE, usid)
         finally:
             c.close()
     except BannerUnavailable as exc:
-        log(f"STOP: Banner unavailable — {exc}"); return
+        return {"ok": False, "reason": "banner_unavailable", "error": str(exc)[:160]}
 
     crns = [str(r.get("courseReferenceNumber")) for r in rows]
     distinct = set(crns)
     dups = [x for x in distinct if crns.count(x) > 1]
     normalized = [normalize_section(s, default_term=TERM_CODE) for s in rows]
     missing = [n["crn"] for n in normalized if not n["subject_course"] or not n["course_name"] or n["capacity"] is None]
-    Path("/tmp/rmn_banner_snapshot_apply.json").write_text(json.dumps(rows[:2], ensure_ascii=False)[:4000], encoding="utf-8")
-
     url, key = load_supabase_env()
     supa = fetch_supabase_current(url, key)
-    open_n = sum(1 for n in normalized if n["open_section"] is True)
-    log(f"fetch: totalCount={total} rows={len(rows)} distinct={len(distinct)} dups={len(dups)} open={open_n} supabase_now={len(supa)}")
-
     guards = {
         "term==202550": term_ok,
         "total==rows==distinct": (total == len(rows) == len(distinct)),
@@ -167,16 +171,29 @@ def main():
         "no_missing_critical_fields": len(missing) == 0,
         "schema_present": check_schema(url, key),
     }
-    log("GUARDS: " + json.dumps(guards))
     if not all(guards.values()):
-        log("GUARD FAILURE -> NO WRITES."); return
-    if not args.apply:
-        log("DRY-RUN ok. Re-run with --apply to perform the one guarded sync. NO writes done."); return
+        return {"ok": False, "reason": "guard_failed", "guards": guards, "total": total, "rows": len(rows)}
+    if not apply:
+        return {"ok": True, "reason": "dry_run", "total": total, "rows": len(rows),
+                "would_add": len([n for n in normalized if n["crn"] not in supa]),
+                "would_update": len([n for n in normalized if n["crn"] in supa])}
+    if _running_lock_held(url, key, TERM_CODE, stale_lock_seconds):
+        return {"ok": False, "reason": "locked"}
+    run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok, trigger=trigger)
+    return {"ok": True, "reason": "applied", "run_id": run_id, "added": added, "updated": updated,
+            "not_seen": not_seen, "total": total,
+            "instruction_envelope": [env[0][1] if env[0] else None, env[1][1] if env[1] else None]}
 
-    log("=== APPLY (guarded) ===")
-    run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok)
-    log(f"APPLIED run={run_id} added={added} updated={updated} not_seen={not_seen} "
-        f"envelope={env[0][1] if env[0] else None}..{env[1][1] if env[1] else None}")
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--apply", action="store_true")
+    args = ap.parse_args()
+    res = run_sync_once(apply=args.apply, trigger="manual")
+    log("GUARDS_OK" if res.get("reason") != "guard_failed" else "GUARD FAILURE -> NO WRITES.")
+    log(json.dumps(res, ensure_ascii=False, default=str))
+    if res.get("reason") == "dry_run":
+        log("DRY-RUN ok. NO writes done.")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,89 @@
+-- Migration 069 (DRAFT — NOT APPLIED): Summer 1447 academic calendar
+-- Source candidate (approved for review): outputs/catalog_rebuild/summer_1447_academic_calendar_candidate.json
+-- Official source: https://www.seu.edu.sa/ar/academic-calendar/1447/  (retrieved 2026-06-22)
+-- Status: DRAFT for human review. Do NOT apply without approval.
+--
+-- WHY a schema change is needed (additive):
+--   1) academic_calendar UNIQUE (tenant_id, academic_year, semester, event_type) has NO track dimension,
+--      but SEU publishes SEPARATE summer schedules for Bachelor vs Graduate that share event_types
+--      (course_registration, tuition_payment, semester_start, midterm_exam, final_exam, ...). Without a
+--      track dimension they collide. -> add `audience` and include it in the uniqueness key.
+--   2) The table has no JSONB column, so the verbatim provenance the catalog rebuild requires
+--      (event_name_raw / hijri_date_raw / gregorian_date_raw / official_raw_text / source_url /
+--      retrieved_at / track) has nowhere to live. -> add `metadata JSONB`.
+--   3) event_type has NO check constraint (only a comment), so NEW event_types need NO schema change.
+--
+-- All statements are additive & idempotent (IF NOT EXISTS / ON CONFLICT DO NOTHING). Existing rows are
+-- backfilled to audience='all' and are otherwise untouched (no DELETE, unlike migration 017).
+
+BEGIN;
+
+-- 1) Additive columns ---------------------------------------------------------
+ALTER TABLE academic_calendar
+    ADD COLUMN IF NOT EXISTS audience TEXT
+        CHECK (audience IN ('all','bachelor','graduate')),
+    ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- existing tenant-wide rows are audience-agnostic -> 'all'
+UPDATE academic_calendar SET audience = 'all' WHERE audience IS NULL;
+
+-- 2) Extend the uniqueness key to include audience ----------------------------
+--    (drops the old auto-named 4-col unique, adds an explicit 5-col one).
+--    NOTE FOR REVIEW: this replaces the constraint migration 017 used in its
+--    ON CONFLICT target. 017 already ran once; future re-runs of 017 would need
+--    the 5-col target. Flagged intentionally.
+DO $$
+DECLARE c text;
+BEGIN
+  SELECT conname INTO c FROM pg_constraint
+   WHERE conrelid = 'academic_calendar'::regclass AND contype = 'u'
+     AND pg_get_constraintdef(oid) LIKE '%(tenant_id, academic_year, semester, event_type)%';
+  IF c IS NOT NULL THEN
+     EXECUTE format('ALTER TABLE academic_calendar DROP CONSTRAINT %I', c);
+  END IF;
+END $$;
+
+ALTER TABLE academic_calendar
+    ADD CONSTRAINT academic_calendar_unique_event
+    UNIQUE (tenant_id, academic_year, semester, event_type, audience);
+
+-- 3) Insert Summer 1447 events (Bachelor + Graduate) --------------------------
+--    Dates: start_date = official Gregorian date from the page (no inference).
+--           Hijri + verbatim raw text preserved in metadata (no column loss).
+--    event_name_ar = official raw event name (VERBATIM, not translated); event_name_en = NULL.
+INSERT INTO academic_calendar
+  (tenant_id, academic_year, semester, event_type, audience, event_name_ar, event_name_en, start_date, end_date, metadata)
+VALUES
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'course_registration', 'bachelor', 'إتاحة فترة "تسجيل المقررات الدراسية" في النظام الطلابي Banner', NULL, '2026-06-24', NULL, '{"event_name_raw": "إتاحة فترة \"تسجيل المقررات الدراسية\" في النظام الطلابي Banner", "hijri_date_raw": "9 محرّم 1448 هـ", "gregorian_date_raw": "24 يونيو 2026", "official_raw_text": "إتاحة فترة \"تسجيل المقررات الدراسية\" في النظام الطلابي Banner | 9 محرّم 1448 هـ | 24 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'semester_start', 'bachelor', 'بداية الدراسة للفصل الصيفي', NULL, '2026-06-28', NULL, '{"event_name_raw": "بداية الدراسة للفصل الصيفي", "hijri_date_raw": "13 محرّم 1448 هـ", "gregorian_date_raw": "28 يونيو 2026", "official_raw_text": "بداية الدراسة للفصل الصيفي | 13 محرّم 1448 هـ | 28 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'tuition_payment', 'bachelor', 'سداد الرسوم الدراسية للفصل الصيفي', NULL, '2026-06-28', NULL, '{"event_name_raw": "سداد الرسوم الدراسية للفصل الصيفي", "hijri_date_raw": "13 محرّم 1448 هـ", "gregorian_date_raw": "28 يونيو 2026", "official_raw_text": "سداد الرسوم الدراسية للفصل الصيفي | 13 محرّم 1448 هـ | 28 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'apology_deadline', 'bachelor', 'إتاحة خدمة "طلب الاعتذار عن الفصل الصيفي" و"طلب الاعتذار عن مقرر دراسي"', NULL, '2026-07-05', NULL, '{"event_name_raw": "إتاحة خدمة \"طلب الاعتذار عن الفصل الصيفي\" و\"طلب الاعتذار عن مقرر دراسي\"", "hijri_date_raw": "20 محرّم 1448 هـ", "gregorian_date_raw": "5 يوليو 2026", "official_raw_text": "إتاحة خدمة \"طلب الاعتذار عن الفصل الصيفي\" و\"طلب الاعتذار عن مقرر دراسي\" | 20 محرّم 1448 هـ | 5 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'absence_excuse_midterm', 'bachelor', 'إتاحة خدمة" أعذار التغيب عن الاختبارات الفصلية"', NULL, '2026-07-19', NULL, '{"event_name_raw": "إتاحة خدمة\" أعذار التغيب عن الاختبارات الفصلية\"", "hijri_date_raw": "5 صفر 1448 هـ", "gregorian_date_raw": "19 يوليو 2026", "official_raw_text": "إتاحة خدمة\" أعذار التغيب عن الاختبارات الفصلية\" | 5 صفر 1448 هـ | 19 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'midterm_exam', 'bachelor', 'الاختبارات الفصلية للكليات', NULL, '2026-07-21', NULL, '{"event_name_raw": "الاختبارات الفصلية للكليات", "hijri_date_raw": "7 صفر 1448 هـ", "gregorian_date_raw": "21 يوليو 2026", "official_raw_text": "الاختبارات الفصلية للكليات | 7 صفر 1448 هـ | 21 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'university_withdrawal_close', 'bachelor', 'فترة إغلاق خدمة الانسحاب من الجامعة', NULL, '2026-08-12', NULL, '{"event_name_raw": "فترة إغلاق خدمة الانسحاب من الجامعة", "hijri_date_raw": "29 صفر 1448 هـ", "gregorian_date_raw": "12 أغسطس 2026", "official_raw_text": "فترة إغلاق خدمة الانسحاب من الجامعة | 29 صفر 1448 هـ | 12 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'absence_excuse_final', 'bachelor', 'إتاحة خدمة أعذار التغيب عن الاختبارات النهائية', NULL, '2026-08-12', NULL, '{"event_name_raw": "إتاحة خدمة أعذار التغيب عن الاختبارات النهائية", "hijri_date_raw": "29 صفر 1448 هـ", "gregorian_date_raw": "12 أغسطس 2026", "official_raw_text": "إتاحة خدمة أعذار التغيب عن الاختبارات النهائية | 29 صفر 1448 هـ | 12 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'final_exam', 'bachelor', 'الاختبارات النهائية للكليات', NULL, '2026-08-16', NULL, '{"event_name_raw": "الاختبارات النهائية للكليات", "hijri_date_raw": "3 ربيع الأول 1448 هـ", "gregorian_date_raw": "16 أغسطس 2026", "official_raw_text": "الاختبارات النهائية للكليات | 3 ربيع الأول 1448 هـ | 16 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'exam_appeal_deadline', 'bachelor', 'إتاحة خدمة الاعتراض على درجة الاختبار النهائي', NULL, '2026-08-20', NULL, '{"event_name_raw": "إتاحة خدمة الاعتراض على درجة الاختبار النهائي", "hijri_date_raw": "7ربيع الأول 1448 هـ", "gregorian_date_raw": "20 أغسطس 2026", "official_raw_text": "إتاحة خدمة الاعتراض على درجة الاختبار النهائي | 7ربيع الأول 1448 هـ | 20 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'semester_end', 'bachelor', 'نهاية الدراسة للفصل الصيفي', NULL, '2026-08-19', NULL, '{"event_name_raw": "نهاية الدراسة للفصل الصيفي", "hijri_date_raw": null, "gregorian_date_raw": "19 أغسطس 2026", "official_raw_text": "نهاية الدراسة للفصل الصيفي | — | 19 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'academic_year_start', 'bachelor', 'بداية العام الجامعي 1448هـ - 1449هـ', NULL, '2026-08-23', NULL, '{"event_name_raw": "بداية العام الجامعي 1448هـ - 1449هـ", "hijri_date_raw": "10ربيع الأول 1448 هـ", "gregorian_date_raw": "23 أغسطس 2026", "official_raw_text": "بداية العام الجامعي 1448هـ - 1449هـ | 10ربيع الأول 1448 هـ | 23 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "بكالوريوس"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'course_registration', 'graduate', 'فترة "تسجيل المقررات الدراسية" عبر النظام الطلابي Banner', NULL, '2026-06-21', NULL, '{"event_name_raw": "فترة \"تسجيل المقررات الدراسية\" عبر النظام الطلابي Banner", "hijri_date_raw": "6 محرم 1448هـ", "gregorian_date_raw": "21 يونيو 2026", "official_raw_text": "فترة \"تسجيل المقررات الدراسية\" عبر النظام الطلابي Banner | 6 محرم 1448هـ | 21 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'new_student_withdrawal_refund', 'graduate', 'خدمة الانسحاب من الجامعة للطلبة المستجدين *مع أحقية استرداد الرسوم', NULL, '2026-06-21', NULL, '{"event_name_raw": "خدمة الانسحاب من الجامعة للطلبة المستجدين *مع أحقية استرداد الرسوم", "hijri_date_raw": "6 محرم 1448هـ", "gregorian_date_raw": "21 يونيو 2026", "official_raw_text": "خدمة الانسحاب من الجامعة للطلبة المستجدين *مع أحقية استرداد الرسوم | 6 محرم 1448هـ | 21 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'tuition_payment', 'graduate', 'فترة "سداد الرسوم الدراسية" للفصل الصيفي', NULL, '2026-06-28', NULL, '{"event_name_raw": "فترة \"سداد الرسوم الدراسية\" للفصل الصيفي", "hijri_date_raw": "13 محرم 1448هـ", "gregorian_date_raw": "28 يونيو 2026", "official_raw_text": "فترة \"سداد الرسوم الدراسية\" للفصل الصيفي | 13 محرم 1448هـ | 28 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'semester_start', 'graduate', 'بداية الدراسة للفصل الدراسي الصيفي', NULL, '2026-06-28', NULL, '{"event_name_raw": "بداية الدراسة للفصل الدراسي الصيفي", "hijri_date_raw": "13 محرم 1448هـ", "gregorian_date_raw": "28 يونيو 2026", "official_raw_text": "بداية الدراسة للفصل الدراسي الصيفي | 13 محرم 1448هـ | 28 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'equivalency_deadline', 'graduate', 'خدمة معادلة المقررات', NULL, '2026-06-28', NULL, '{"event_name_raw": "خدمة معادلة المقررات", "hijri_date_raw": "13 محرم 1448هـ", "gregorian_date_raw": "28 يونيو 2026", "official_raw_text": "خدمة معادلة المقررات | 13 محرم 1448هـ | 28 يونيو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'apology_deadline', 'graduate', 'خدمة "طلب الاعتذار عن الفصل الصيفي" و "طلب الاعتذار عن مقرر دراسي"', NULL, '2026-07-05', NULL, '{"event_name_raw": "خدمة \"طلب الاعتذار عن الفصل الصيفي\" و \"طلب الاعتذار عن مقرر دراسي\"", "hijri_date_raw": "20 محرم 1448هـ", "gregorian_date_raw": "5 يوليو 2026", "official_raw_text": "خدمة \"طلب الاعتذار عن الفصل الصيفي\" و \"طلب الاعتذار عن مقرر دراسي\" | 20 محرم 1448هـ | 5 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'graduation_request_deadline', 'graduate', 'فترة تفعيل خدمة " طلب تخرج" في الخدمات الطلابية', NULL, '2026-07-05', NULL, '{"event_name_raw": "فترة تفعيل خدمة \" طلب تخرج\" في الخدمات الطلابية", "hijri_date_raw": "20 محرم 1448هـ", "gregorian_date_raw": "5 يوليو 2026", "official_raw_text": "فترة تفعيل خدمة \" طلب تخرج\" في الخدمات الطلابية | 20 محرم 1448هـ | 5 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'absence_excuse_midterm', 'graduate', 'فترة تفعيل خدمة " رفع أعذار التغيب عن الاختبارات الفصلية"', NULL, '2026-07-19', NULL, '{"event_name_raw": "فترة تفعيل خدمة \" رفع أعذار التغيب عن الاختبارات الفصلية\"", "hijri_date_raw": "5 صفر 1448هـ", "gregorian_date_raw": "19 يوليو 2026", "official_raw_text": "فترة تفعيل خدمة \" رفع أعذار التغيب عن الاختبارات الفصلية\" | 5 صفر 1448هـ | 19 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'midterm_exam', 'graduate', 'الاختبارات الفصلية للفصل الدراسي الصيفي', NULL, '2026-07-21', NULL, '{"event_name_raw": "الاختبارات الفصلية للفصل الدراسي الصيفي", "hijri_date_raw": "7 صفر 1448هـ", "gregorian_date_raw": "21 يوليو 2026", "official_raw_text": "الاختبارات الفصلية للفصل الدراسي الصيفي | 7 صفر 1448هـ | 21 يوليو 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'university_withdrawal_close', 'graduate', 'فترة إغلاق خدمة الانسحاب من الجامعة', NULL, '2026-08-12', NULL, '{"event_name_raw": "فترة إغلاق خدمة الانسحاب من الجامعة", "hijri_date_raw": "29 صفر 1448هـ", "gregorian_date_raw": "12 أغسطس 2026", "official_raw_text": "فترة إغلاق خدمة الانسحاب من الجامعة | 29 صفر 1448هـ | 12 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'absence_excuse_final', 'graduate', 'فترة تفعيل خدمة " رفع أعذار التغيب عن الاختبارات النهائية"', NULL, '2026-08-12', NULL, '{"event_name_raw": "فترة تفعيل خدمة \" رفع أعذار التغيب عن الاختبارات النهائية\"", "hijri_date_raw": "29 صفر 1448هـ", "gregorian_date_raw": "12 أغسطس 2026", "official_raw_text": "فترة تفعيل خدمة \" رفع أعذار التغيب عن الاختبارات النهائية\" | 29 صفر 1448هـ | 12 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'final_exam', 'graduate', 'الاختبارات النهائية للفصل الدراسي الصيفي', NULL, '2026-08-16', NULL, '{"event_name_raw": "الاختبارات النهائية للفصل الدراسي الصيفي", "hijri_date_raw": "3 ربيع الأول 1448هـ", "gregorian_date_raw": "16 أغسطس 2026", "official_raw_text": "الاختبارات النهائية للفصل الدراسي الصيفي | 3 ربيع الأول 1448هـ | 16 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'exam_appeal_deadline', 'graduate', 'فترة تفعيل خدمة "الاعتراض على درجة الاختبار النهائي"', NULL, '2026-08-20', NULL, '{"event_name_raw": "فترة تفعيل خدمة \"الاعتراض على درجة الاختبار النهائي\"", "hijri_date_raw": "7 ربيع الأول 1448هـ", "gregorian_date_raw": "20 أغسطس 2026", "official_raw_text": "فترة تفعيل خدمة \"الاعتراض على درجة الاختبار النهائي\" | 7 ربيع الأول 1448هـ | 20 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb),
+  ('00000000-0000-0000-0000-000000000001', '1447', 'summer', 'semester_end', 'graduate', 'نهاية الفصل الدراسي الصيفي', NULL, '2026-08-20', NULL, '{"event_name_raw": "نهاية الفصل الدراسي الصيفي", "hijri_date_raw": null, "gregorian_date_raw": "20 أغسطس 2026", "official_raw_text": "نهاية الفصل الدراسي الصيفي | — | 20 أغسطس 2026", "source_url": "https://www.seu.edu.sa/ar/academic-calendar/1447/", "retrieved_at": "2026-06-22", "track": "الدراسات العليا"}'::jsonb)
+ON CONFLICT (tenant_id, academic_year, semester, event_type, audience) DO NOTHING;
+
+COMMIT;
+
+-- ── NEW event_types introduced (no check-constraint change required; documented for review) ──
+-- ['absence_excuse_final', 'absence_excuse_midterm', 'academic_year_start', 'apology_deadline', 'equivalency_deadline', 'graduation_request_deadline', 'new_student_withdrawal_refund', 'university_withdrawal_close']
+-- ── existing event_types reused: ['course_registration', 'exam_appeal_deadline', 'final_exam', 'midterm_exam', 'semester_end', 'semester_start', 'tuition_payment']

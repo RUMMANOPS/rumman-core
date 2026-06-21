@@ -478,6 +478,79 @@ async def _get_plan_by_id(db: httpx.AsyncClient, student_id: str, plan_id: str) 
     return rows[0] if rows else None
 
 
+# ── D.5: confirmed-schedule lecture events (on-demand, NO storage, KSA-local times) ──
+# Banner day names are full English weekday names. KSA has no DST, so we emit plain
+# local date + HH:MM strings (NOT UTC instants) — the app renders them as-is.
+_WEEKDAY_IDX = {"monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3,
+                "friday": 4, "saturday": 5, "sunday": 6}
+
+
+async def _confirmed_lecture_events(db: httpx.AsyncClient, student_id: str,
+                                    term: Optional[str], win_start, win_end) -> tuple[list[dict], str]:
+    """
+    Expand the CONFIRMED plan's section meetings into dated lecture instances within
+    [win_start, win_end] (date objects). Returns (events, schedule_status).
+    schedule_status: 'confirmed' (events generated) | 'pinned' | 'none' | side-state.
+    ONLY a confirmed plan yields events — pinned/none yield []. No storage; pure compute.
+    """
+    plan = await _get_active_plan(db, student_id, term)
+    status = plan.get("status") if plan else "none"
+    if not plan or status != "confirmed":
+        return [], status
+
+    secs = await _get(db, "student_registered_sections", {
+        "select":     "crn,section_number,course_code,banner_course_code,course_name,"
+                      "campus,delivery_mode,class_meetings,status",
+        "student_id": f"eq.{student_id}",
+        "plan_id":    f"eq.{plan['id']}",
+        "status":     "neq.dropped",
+        "limit":      "500",
+    })
+
+    # term-level fallback bounds for meetings missing their own start/end dates
+    cfg = await _get(db, "app_term_config", {
+        "select":    "instruction_start_date,instruction_end_date",
+        "tenant_id": f"eq.{TENANT_ID}", "limit": "1",
+    })
+    term_start = _parse_meeting_date(cfg[0].get("instruction_start_date")) if cfg else None
+    term_end   = _parse_meeting_date(cfg[0].get("instruction_end_date"))   if cfg else None
+
+    events: list[dict] = []
+    for s in secs:
+        course_code = s.get("course_code") or s.get("banner_course_code")
+        for m in (s.get("class_meetings") or []):
+            wd = _WEEKDAY_IDX.get((m.get("day") or "").strip().lower())
+            st, en = m.get("start_time"), m.get("end_time")
+            if wd is None or _hhmm_to_min(st) is None or _hhmm_to_min(en) is None:
+                continue  # no weekday/time -> online/async, never fabricate a lecture
+            lo = max(win_start, _parse_meeting_date(m.get("start_date")) or term_start or win_start)
+            hi = min(win_end,   _parse_meeting_date(m.get("end_date"))   or term_end   or win_end)
+            d = lo
+            while d <= hi:
+                if d.weekday() == wd:
+                    events.append({
+                        "event_type":     "lecture",
+                        "source":         "confirmed_registration",
+                        "date":           d.isoformat(),
+                        "start_time":     st,
+                        "end_time":       en,
+                        "course_code":    course_code,
+                        "course_name":    s.get("course_name"),
+                        "crn":            s.get("crn"),
+                        "section_number": s.get("section_number"),
+                        "meeting_type":   m.get("type"),
+                        "delivery_mode":  s.get("delivery_mode"),
+                        "campus":         m.get("campus") or s.get("campus"),
+                        "room":           m.get("room"),
+                        "building":       m.get("building"),
+                    })
+                    d += timedelta(days=7)   # next same-weekday occurrence
+                else:
+                    d += timedelta(days=1)
+    events.sort(key=lambda e: (e["date"], e["start_time"]))
+    return events, "confirmed"
+
+
 async def _pin_core(db: httpx.AsyncClient, student_id: str, crns: list[str], term: str) -> dict:
     """
     Shared PIN logic — used by /registration/pin and the deprecated /registration/approve alias.
@@ -999,6 +1072,12 @@ async def student_today(student_id: str):
                 "ref_type": "notification",
             })
 
+        # Today's lectures from the CONFIRMED plan only (pinned/none -> empty + status).
+        term_code = await _resolve_active_term(db)
+        today_d = now.date()
+        lectures_today, schedule_status = await _confirmed_lecture_events(
+            db, student_id, term_code, today_d, today_d)
+
         return {
             "generated_at":      _now_iso(),
             "urgent":            urgent,
@@ -1010,6 +1089,8 @@ async def student_today(student_id: str):
             "active_courses":    active_courses[:8],
             "exam_proximities":  exam_proximities,
             "academic_events":   academic_events,
+            "lectures_today":    lectures_today,
+            "schedule_status":   schedule_status,
         }
 
 
@@ -1058,12 +1139,21 @@ async def student_calendar(
         })
         tasks = [t for t in tasks if t.get("due_at", "")[:10] <= end[:10]]
 
+        # Lecture instances from the CONFIRMED plan only, across the requested window.
+        term_code = await _resolve_active_term(db)
+        win_start = datetime.fromisoformat(start).date()
+        win_end   = datetime.fromisoformat(end).date()
+        lectures, schedule_status = await _confirmed_lecture_events(
+            db, student_id, term_code, win_start, win_end)
+
         return {
-            "from":     start,
-            "to":       end,
-            "personal": personal,
-            "official": official,
-            "tasks":    tasks,
+            "from":            start,
+            "to":              end,
+            "personal":        personal,
+            "official":        official,
+            "tasks":           tasks,
+            "lectures":        lectures,
+            "schedule_status": schedule_status,
         }
 
 

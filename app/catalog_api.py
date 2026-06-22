@@ -46,6 +46,10 @@ _EXCLUDED_PROGRAMS = frozenset({"LAW"})
 # Degree types never served in active registration endpoints
 _EXCLUDED_DEGREE_TYPES = frozenset({"diploma"})
 
+# Catalog statuses considered "serving" — draft/validated are both pre-activation states
+# that serve data via v_draft_catalog_* views; active is post-activation.
+_SERVING_STATUSES = frozenset({"draft", "validated", "active"})
+
 _HEADERS = {
     "apikey":        SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -82,9 +86,17 @@ async def _get(
 
 
 def _guard_program(program_code: str) -> None:
-    """Raise 404 if program_code is explicitly excluded (LAW guard)."""
+    """Raise 404 for explicitly excluded programs (LAW) before any DB call."""
     if program_code.upper() in _EXCLUDED_PROGRAMS:
         raise HTTPException(404, detail=f"Program '{program_code}' is not available on this surface.")
+
+
+def _guard_program_row(row: dict, program_code: str) -> None:
+    """Raise 404 if a fetched program row is excluded (diploma, LAW). Belt-and-suspenders."""
+    if row.get("program_code", "").upper() in _EXCLUDED_PROGRAMS:
+        raise HTTPException(404, detail=f"Program '{program_code}' is not available on this surface.")
+    if row.get("degree_type") in _EXCLUDED_DEGREE_TYPES:
+        raise HTTPException(404, detail=f"Program '{program_code}' is not served on this surface (degree type: {row.get('degree_type')}).")
 
 
 def _strip_catalog_envelope(row: dict) -> dict:
@@ -152,15 +164,18 @@ async def get_catalog_version():
     if not rows:
         raise HTTPException(404, detail="No catalog version found.")
     row = rows[0]
+    status = row["status"]
     return {
         "version_code":   row["version_code"],
-        "status":         row["status"],
+        "status":         status,
         "notes":          row.get("notes"),
         "created_at":     row.get("created_at"),
         "validated_at":   row.get("validated_at"),
         "activated_at":   row.get("activated_at"),
-        "is_draft":       row["status"] == "draft",
-        "is_active":      row["status"] == "active",
+        "is_draft":       status == "draft",
+        "is_validated":   status == "validated",
+        "is_active":      status == "active",
+        "is_serving":     status in _SERVING_STATUSES,
     }
 
 
@@ -216,8 +231,7 @@ async def get_program(program_code: str):
         if not rows:
             raise HTTPException(404, detail=f"Program '{program_code}' not found or not active.")
         prog = rows[0]
-        if prog["program_code"] in _EXCLUDED_PROGRAMS or prog.get("degree_type") in _EXCLUDED_DEGREE_TYPES:
-            raise HTTPException(404, detail=f"Program '{program_code}' is not available on this surface.")
+        _guard_program_row(prog, program_code)
 
         # Course count
         course_rows = await _get(db, "v_draft_catalog_program_courses", {
@@ -254,6 +268,17 @@ async def list_program_courses(
     """
     _guard_program(program_code)
     async with _db() as db:
+        # Verify program exists before returning empty course list
+        prog_check = await _get(db, "v_draft_catalog_programs", {
+            "tenant_id":    f"eq.{TENANT_ID}",
+            "program_code": f"eq.{program_code.upper()}",
+            "select":       "program_code,degree_type",
+            "limit":        "1",
+        })
+        if not prog_check:
+            raise HTTPException(404, detail=f"Program '{program_code}' not found or not active.")
+        _guard_program_row(prog_check[0], program_code)
+
         params: dict[str, Any] = {
             "tenant_id":    f"eq.{TENANT_ID}",
             "program_code": f"eq.{program_code.upper()}",
@@ -308,8 +333,7 @@ async def get_program_plan(program_code: str):
         if not prog_rows:
             raise HTTPException(404, detail=f"Program '{program_code}' not found or not active.")
         prog = prog_rows[0]
-        if prog["program_code"] in _EXCLUDED_PROGRAMS or prog.get("degree_type") in _EXCLUDED_DEGREE_TYPES:
-            raise HTTPException(404, detail=f"Program '{program_code}' is not available on this surface.")
+        _guard_program_row(prog, program_code)
 
         # All courses
         course_rows = await _get(db, "v_draft_catalog_program_courses", {
@@ -370,6 +394,17 @@ async def list_program_prerequisites(program_code: str):
     """
     _guard_program(program_code)
     async with _db() as db:
+        # Verify program exists and is active before querying prerequisites
+        prog_check = await _get(db, "v_draft_catalog_programs", {
+            "tenant_id":    f"eq.{TENANT_ID}",
+            "program_code": f"eq.{program_code.upper()}",
+            "select":       "program_code,degree_type",
+            "limit":        "1",
+        })
+        if not prog_check:
+            raise HTTPException(404, detail=f"Program '{program_code}' not found or not active.")
+        _guard_program_row(prog_check[0], program_code)
+
         rows = await _get(db, "v_draft_catalog_prerequisites", {
             "tenant_id":    f"eq.{TENANT_ID}",
             "program_code": f"eq.{program_code.upper()}",

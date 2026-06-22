@@ -224,6 +224,14 @@ except Exception as _cat_err:
     import logging
     logging.getLogger(__name__).warning("catalog_api not loaded: %s", _cat_err)
 
+# Student Progress API (read-only, student_program_profile + student_course_history)
+try:
+    from progress_api import router as progress_router
+    app.include_router(progress_router)
+except Exception as _prog_err:
+    import logging
+    logging.getLogger(__name__).warning("progress_api not loaded: %s", _prog_err)
+
 
 # ---------------------------------------------------------------------------
 # Request / response models

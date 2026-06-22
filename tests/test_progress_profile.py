@@ -140,7 +140,9 @@ MOCK_CATALOG_CREDIT_ROWS = [
     },
 ]
 
-# student_registered_sections rows
+# student_registered_sections rows.
+# Two active (one with NULL canonical) + one dropped that MUST be filtered out
+# by the status IN ('active','approved') rule (decision §6 Issue 1).
 MOCK_SECTIONS = [
     {
         "id":                    "ss000001",
@@ -149,7 +151,7 @@ MOCK_SECTIONS = [
         "banner_course_code":    "CS201",
         "canonical_course_code": "CS201",
         "course_name":           "Data Structures",
-        "status":                "planned",
+        "status":                "active",
         "source":                "smart_registration",
         "delivery_mode":         "online",
         "created_at":            "2026-06-01T00:00:00+00:00",
@@ -161,8 +163,20 @@ MOCK_SECTIONS = [
         "banner_course_code":    "XUNKNOWN",
         "canonical_course_code": None,           # NULL — unresolved
         "course_name":           "Unknown Course",
-        "status":                "planned",
+        "status":                "active",
         "source":                "banner_sync",
+        "delivery_mode":         None,
+        "created_at":            "2026-06-01T00:00:00+00:00",
+    },
+    {
+        "id":                    "ss000003",
+        "term_code":             "202420",
+        "crn":                   "12347",
+        "banner_course_code":    "STAT199",
+        "canonical_course_code": "STAT199",
+        "course_name":           "Dropped Course",
+        "status":                "dropped",        # MUST be filtered out
+        "source":                "smart_registration",
         "delivery_mode":         None,
         "created_at":            "2026-06-01T00:00:00+00:00",
     },
@@ -259,7 +273,13 @@ def make_mock(
                 return catalog_enrich_rows or []
             return plan_rows or []
         if table == "student_registered_sections":
-            return section_rows or []
+            rows = section_rows or []
+            # Faithfully simulate the DB-side status filter the endpoint applies.
+            status_filter = params.get("status")
+            if status_filter and status_filter.startswith("in.("):
+                allowed = status_filter[len("in.("):-1].split(",")
+                rows = [r for r in rows if r.get("status") in allowed]
+            return rows
         return []
     return _mock
 
@@ -484,6 +504,30 @@ class TestProgressCompleted:
         ))):
             assert client.get(f"/v1/progress/completed?student_id={STUDENT_UUID}").status_code == 404
 
+    def test_lowercase_profile_code_uses_catalog_canonical_casing(self):
+        """
+        Regression (red-team): a profile storing 'cs' (lowercase) must still
+        resolve credits. The credit-map query must use the catalog's canonical
+        'CS' — not the profile's raw 'cs' (which returns empty in PostgREST).
+        """
+        lc_profile = {**MOCK_PROFILE, "program_code": "cs"}
+        seen = {}
+        async def recording(db, table, params):
+            if table == "student_program_profile":
+                return [lc_profile]
+            if table == "v_draft_catalog_programs":
+                return [MOCK_PROGRAM_CS]          # catalog row has program_code='CS'
+            if table == "student_course_history":
+                return MOCK_COMPLETED_ROWS
+            if table == "v_draft_catalog_program_courses":
+                seen["program_code"] = params.get("program_code")
+                return MOCK_CATALOG_CREDIT_ROWS
+            return []
+        with patch("progress_api._get", new=AsyncMock(side_effect=recording)):
+            b = client.get(f"/v1/progress/completed?student_id={STUDENT_UUID}").json()
+        assert seen["program_code"] == "eq.CS"     # canonical casing, not 'eq.cs'
+        assert b["completed_credits"] == 7         # credits resolved despite lowercase profile
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # /v1/progress/current
@@ -549,6 +593,32 @@ class TestProgressCurrent:
             b = client.get(f"/v1/progress/current?student_id={STUDENT_UUID}").json()
         assert b["count"] == 0
         assert b["courses"] == []
+
+    def test_dropped_section_excluded(self):
+        """STAT199 (status=dropped) must NOT appear; only active rows count (§6 Issue 1)."""
+        with patch("progress_api._get", new=AsyncMock(side_effect=make_mock(
+            [MOCK_PROFILE], [MOCK_PROGRAM_CS],
+            section_rows=MOCK_SECTIONS,
+            catalog_enrich_rows=MOCK_CATALOG_CS201,
+        ))):
+            b = client.get(f"/v1/progress/current?student_id={STUDENT_UUID}").json()
+        banners = [c["banner_course_code"] for c in b["courses"]]
+        assert "STAT199" not in banners
+        assert b["count"] == 2  # CS201 + XUNKNOWN, dropped excluded
+
+    def test_status_filter_sent_to_db(self):
+        """The section query must carry status=in.(active,approved)."""
+        seen = {}
+        async def recording(db, table, params):
+            if table == "student_program_profile": return [MOCK_PROFILE]
+            if table == "v_draft_catalog_programs": return [MOCK_PROGRAM_CS]
+            if table == "student_registered_sections":
+                seen["status"] = params.get("status")
+                return []
+            return []
+        with patch("progress_api._get", new=AsyncMock(side_effect=recording)):
+            client.get(f"/v1/progress/current?student_id={STUDENT_UUID}")
+        assert seen.get("status") == "in.(active,approved)"
 
     def test_no_grades_in_response(self):
         with patch("progress_api._get", new=AsyncMock(side_effect=make_mock(

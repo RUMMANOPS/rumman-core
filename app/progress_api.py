@@ -35,6 +35,13 @@ TENANT_ID = "00000000-0000-0000-0000-000000000001"
 _EXCLUDED_PROGRAMS     = frozenset({"LAW"})
 _EXCLUDED_DEGREE_TYPES = frozenset({"diploma"})
 
+# A registered section counts as a "current course" only when the student is
+# actually enrolled/approved. 'planned' is a smart-registration draft (not an
+# enrollment), 'dropped' was abandoned, 'needs_review' is unresolved — none of
+# these are current. PostgREST filter form: status=in.(active,approved)
+_CURRENT_SECTION_STATUSES = ("active", "approved")
+_CURRENT_SECTION_FILTER   = f"in.({','.join(_CURRENT_SECTION_STATUSES)})"
+
 _HEADERS = {
     "apikey":        SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -229,8 +236,11 @@ async def get_progress_completed(
     """
     async with _db() as db:
         profile      = await _require_active_profile(db, student_id)
-        program_code = profile["program_code"]
-        prog         = await _require_catalog_program(db, program_code)
+        prog         = await _require_catalog_program(db, profile["program_code"])
+        # Use the catalog's canonical program_code casing for all downstream
+        # queries. A profile storing a different case (e.g. 'cs') would otherwise
+        # silently return an empty credit map → completed_credits=0 with no error.
+        program_code = prog["program_code"]
 
         history_rows = await _get(db, "student_course_history", {
             "student_id": f"eq.{student_id}",
@@ -316,7 +326,12 @@ async def get_progress_current(
     student_id: str = Query(..., description="Student UUID"),
 ):
     """
-    Courses the student is currently registered in (from student_registered_sections).
+    Courses the student is currently enrolled in.
+
+    Source of truth: student_registered_sections, filtered to status IN
+    ('active','approved') — 'planned' (draft), 'dropped', and 'needs_review'
+    are NOT current courses. student_course_history.course_state='in_progress'
+    is intentionally NOT used here, to avoid a course appearing twice.
 
     Rows with canonical_course_code=NULL are included with catalog_match=false.
     credit_hours from student_registered_sections is never used in calculations
@@ -324,12 +339,16 @@ async def get_progress_current(
     """
     async with _db() as db:
         profile      = await _require_active_profile(db, student_id)
-        program_code = profile["program_code"]
-        prog         = await _require_catalog_program(db, program_code)
+        prog         = await _require_catalog_program(db, profile["program_code"])
+        # Use the catalog's canonical program_code casing for all downstream
+        # queries. A profile storing a different case (e.g. 'cs') would otherwise
+        # silently return an empty credit map → completed_credits=0 with no error.
+        program_code = prog["program_code"]
 
         section_rows = await _get(db, "student_registered_sections", {
             "student_id": f"eq.{student_id}",
             "tenant_id":  f"eq.{TENANT_ID}",
+            "status":     _CURRENT_SECTION_FILTER,   # active/approved only — not planned/dropped
             "select":     (
                 "id,term_code,crn,banner_course_code,canonical_course_code,"
                 "course_name,status,source,delivery_mode,created_at"
@@ -413,8 +432,11 @@ async def get_progress_summary(
     """
     async with _db() as db:
         profile      = await _require_active_profile(db, student_id)
-        program_code = profile["program_code"]
-        prog         = await _require_catalog_program(db, program_code)
+        prog         = await _require_catalog_program(db, profile["program_code"])
+        # Use the catalog's canonical program_code casing for all downstream
+        # queries. A profile storing a different case (e.g. 'cs') would otherwise
+        # silently return an empty credit map → completed_credits=0 with no error.
+        program_code = prog["program_code"]
 
         # Completed courses
         history_rows = await _get(db, "student_course_history", {
@@ -430,10 +452,11 @@ async def get_progress_summary(
         ]
         catalog_map = await _fetch_credit_hours_map(db, program_code, canonical_codes)
 
-        # Current registrations count
+        # Current registrations count — active/approved only (decision: §6 Issue 1)
         section_rows = await _get(db, "student_registered_sections", {
             "student_id": f"eq.{student_id}",
             "tenant_id":  f"eq.{TENANT_ID}",
+            "status":     _CURRENT_SECTION_FILTER,
             "select":     "id",
         })
 
@@ -493,8 +516,11 @@ async def get_progress_plan_status(
     """
     async with _db() as db:
         profile      = await _require_active_profile(db, student_id)
-        program_code = profile["program_code"]
-        prog         = await _require_catalog_program(db, program_code)
+        prog         = await _require_catalog_program(db, profile["program_code"])
+        # Use the catalog's canonical program_code casing for all downstream
+        # queries. A profile storing a different case (e.g. 'cs') would otherwise
+        # silently return an empty credit map → completed_credits=0 with no error.
+        program_code = prog["program_code"]
 
         # All courses in the program (catalog-authoritative)
         plan_rows = await _get(db, "v_draft_catalog_program_courses", {
@@ -516,10 +542,11 @@ async def get_progress_plan_status(
             "select":     "canonical_course_code,banner_course_code,course_state,term_code,confidence",
         })
 
-        # In-progress set: from student_registered_sections
+        # In-progress set: active/approved registered sections only (§6 Issue 1)
         section_rows = await _get(db, "student_registered_sections", {
             "student_id": f"eq.{student_id}",
             "tenant_id":  f"eq.{TENANT_ID}",
+            "status":     _CURRENT_SECTION_FILTER,
             "select":     "canonical_course_code,banner_course_code,term_code,status",
         })
 

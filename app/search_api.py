@@ -216,6 +216,14 @@ except Exception as _auth_err:
     import logging
     logging.getLogger(__name__).warning("auth_api not loaded: %s", _auth_err)
 
+# Official Catalog adapter (read-only, cat_* tables)
+try:
+    from catalog_api import router as catalog_router
+    app.include_router(catalog_router)
+except Exception as _cat_err:
+    import logging
+    logging.getLogger(__name__).warning("catalog_api not loaded: %s", _cat_err)
+
 
 # ---------------------------------------------------------------------------
 # Request / response models

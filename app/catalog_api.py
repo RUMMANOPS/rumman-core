@@ -258,7 +258,7 @@ async def list_program_courses(
             "tenant_id":    f"eq.{TENANT_ID}",
             "program_code": f"eq.{program_code.upper()}",
             "select":       (
-                "canonical_course_code,official_course_code_raw,normalized_course_code,"
+                "program_code,canonical_course_code,official_course_code_raw,normalized_course_code,"
                 "official_title_ar,official_title_en,source_language,"
                 "level,credit_hours,category,category_confidence,"
                 "is_required,is_elective,elective_group,track,"
@@ -316,7 +316,7 @@ async def get_program_plan(program_code: str):
             "tenant_id":    f"eq.{TENANT_ID}",
             "program_code": f"eq.{program_code.upper()}",
             "select":       (
-                "canonical_course_code,official_course_code_raw,normalized_course_code,"
+                "program_code,canonical_course_code,official_course_code_raw,normalized_course_code,"
                 "official_title_ar,official_title_en,"
                 "level,credit_hours,category,is_required,is_elective,"
                 "elective_group,track,choose_rule,choose_count,choose_credits,needs_human_review"

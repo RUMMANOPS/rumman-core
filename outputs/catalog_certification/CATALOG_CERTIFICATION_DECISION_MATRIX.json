@@ -1,0 +1,609 @@
+{
+  "_meta": {
+    "title": "Catalog Certification Decision Matrix",
+    "date": "2026-06-24",
+    "source_audit": "outputs/catalog_certification/FULL_CATALOG_PLAN_CERTIFICATION_AUDIT.md",
+    "scope": "19 active programs exposed by /v1/catalog/programs",
+    "no_writes": "advisory only — no DB/mobile/migration changes",
+    "value_legend": {
+      "certification_status": [
+        "certified_100",
+        "safe_with_semantics",
+        "hide_plan_until_patch",
+        "blocked"
+      ],
+      "mobile_plan_display_status": [
+        "show_full_plan",
+        "show_with_semantics",
+        "show_program_only_hide_plan",
+        "hide_program"
+      ],
+      "can_use_for_smart_registration": [
+        "yes_levels_3_plus",
+        "out_of_scope_v1_masters",
+        "no"
+      ]
+    },
+    "counts": {
+      "certified_100": 8,
+      "safe_with_semantics": 7,
+      "hide_plan_until_patch": 4,
+      "blocked": 0,
+      "show_full_plan": 8,
+      "show_with_semantics": 7,
+      "show_program_only_hide_plan": 4,
+      "hide_program": 0
+    },
+    "smart_registration_note": "Smart Registration v1 targets the 8-level undergraduate term-builder. Eligible only for certified/semantics bachelors at levels >=3 (common first year levels 1&2 excluded). Masters flagged out_of_scope_v1. All hide_plan_until_patch programs = no."
+  },
+  "programs": [
+    {
+      "program_code": "MGT",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "البيانات تطابق المصدر 100٪ والساعات تتصالح (130=130). تحتاج عرض «السنة الأولى المشتركة» بدل «المستوى 1» وعدم اختلاق Level 2.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 130,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_as_pool",
+      "required_catalog_patch": "add academic_phase flag (schema); STEP rule needs official source (do not hardcode)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "ACC",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "البيانات تطابق المصدر 100٪ والساعات تتصالح (130=130). تحتاج عرض «السنة الأولى المشتركة» بدل «المستوى 1» وعدم اختلاق Level 2.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 130,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_as_pool",
+      "required_catalog_patch": "add academic_phase flag (schema); STEP rule needs official source (do not hardcode)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "FIN",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "البيانات تطابق المصدر 100٪ والساعات تتصالح (130=130). تحتاج عرض «السنة الأولى المشتركة» بدل «المستوى 1» وعدم اختلاق Level 2.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 130,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_as_pool",
+      "required_catalog_patch": "add academic_phase flag (schema); STEP rule needs official source (do not hardcode)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "ECOM",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "البيانات تطابق المصدر 100٪ والساعات تتصالح (130=130). تحتاج عرض «السنة الأولى المشتركة» بدل «المستوى 1» وعدم اختلاق Level 2.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 130,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_as_pool",
+      "required_catalog_patch": "add academic_phase flag (schema); STEP rule needs official source (do not hardcode)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "CS",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "118 يتصالح مع 130 عبر «اختر 4 من 8» اختياري (level=None). سنة أولى مشتركة. ENG001 مقسوم Level1+2.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 118,
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        "None"
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_choose_4_of_8",
+      "required_catalog_patch": "level electives or expose choose-rule (schema/API); academic_phase flag",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "IT",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "118 يتصالح مع 130 عبر «اختر 4» اختياري (12 placeholder IT4XX level=None). سنة أولى مشتركة.",
+      "official_total_credits": 130,
+      "api_total_credits": 130,
+      "plan_credit_sum": 118,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        "None"
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_choose_4",
+      "required_catalog_patch": "level electives or expose choose-rule; academic_phase flag",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "DS",
+      "certification_status": "safe_with_semantics",
+      "mobile_plan_display_status": "show_with_semantics",
+      "reason": "121 يتصالح مع 133 عبر «اختر 4 من 8» اختياري (level=None، مساران AI/BigData). سنة أولى مشتركة.",
+      "official_total_credits": 133,
+      "api_total_credits": 133,
+      "plan_credit_sum": 121,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        "None"
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "common_first_year_relabel + use_official_total + electives_choose_4_of_8",
+      "required_catalog_patch": "level electives or expose choose-rule; academic_phase flag",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "DM",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "125=125, مستويات [1..8] كاملة، المصدر يستخدم Level One/Two صراحةً. لا فجوة.",
+      "official_total_credits": 125,
+      "api_total_credits": 125,
+      "plan_credit_sum": 125,
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "yes_levels_3_plus"
+    },
+    {
+      "program_code": "ENGT",
+      "certification_status": "hide_plan_until_patch",
+      "mobile_plan_display_status": "show_program_only_hide_plan",
+      "reason": "DB فيه Level 2 (6 مقررات/17س) بينما المصدر «First Year → Level three» (لا Level 2). توزيع المقررات على المستويات غير موثوق رغم تصالح المجموع 127.",
+      "official_total_credits": 127,
+      "api_total_credits": 127,
+      "plan_credit_sum": 127,
+      "levels": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "hide_plan_map + show_program",
+      "required_catalog_patch": "data: reconcile ENGT Level 2 vs source First Year->Level three (per-course level mapping)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": false,
+      "can_use_for_smart_registration": "no"
+    },
+    {
+      "program_code": "HCI",
+      "certification_status": "hide_plan_until_patch",
+      "mobile_plan_display_status": "show_program_only_hide_plan",
+      "reason": "خطأ استخراج: المستوى الثاني محذوف رغم وجوده رسميًا «المستوى الثاني»؛ 13 مقرر/38س مكدّسة في Level 8؛ المجموع 151 بدل 130 (+21).",
+      "official_total_credits": 130,
+      "api_total_credits": 151,
+      "plan_credit_sum": 151,
+      "levels": [
+        1,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "hide_plan_map + show_program",
+      "required_catalog_patch": "data: re-extract HCI (restore L2, de-bloat L8, fix total 151->130)",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": false,
+      "can_use_for_smart_registration": "no"
+    },
+    {
+      "program_code": "PH",
+      "certification_status": "hide_plan_until_patch",
+      "mobile_plan_display_status": "show_program_only_hide_plan",
+      "reason": "نموذج سنوي [1,2,3,4]=4 سنوات لا 8 فصول؛ المجموع 151 بدل 133 (+18)؛ عربي.",
+      "official_total_credits": 133,
+      "api_total_credits": 151,
+      "plan_credit_sum": 151,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": true,
+        "english_foundation": true,
+        "step_exemption_possible": true,
+        "elective_pool": true,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": true
+      },
+      "required_mobile_rule": "hide_plan_map + show_program",
+      "required_catalog_patch": "data: re-model PH to semesters OR tag structure_type=year; fix total 151->133",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": false,
+      "can_use_for_smart_registration": "no"
+    },
+    {
+      "program_code": "MBA",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36 (عربي)، 4 فصول. مطابق. ملاحظة: فصل تأسيسي لحملة بكالوريوس غير الإدارة.",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "note_foundation_semester_non_business",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "EMBA",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36 (عربي)، سنتان×فصلان. مطابق.",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "MDM",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36 (عربي)، سنتان×فصلان. مطابق. (DB status=needs_review — راجع التصنيف الإداري لا الخطة.)",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "confirm_db_status_field",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "EMHQS",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36 incl capstone، Semester 1..4. مطابق.",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "MHA",
+      "certification_status": "hide_plan_until_patch",
+      "mobile_plan_display_status": "show_program_only_hide_plan",
+      "reason": "المجموع 42 بدل 36 (+6) — تضخّم ساعات (تدريب ميداني/مشروع مزدوج الاحتساب محتمل).",
+      "official_total_credits": 36,
+      "api_total_credits": 42,
+      "plan_credit_sum": 42,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "hide_plan_map + show_program",
+      "required_catalog_patch": "data: reconcile MHA total 42->36",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": false,
+      "can_use_for_smart_registration": "no"
+    },
+    {
+      "program_code": "MCS",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36، Level One..Four (4 فصول)، capstone. مطابق.",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "MDS",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36، Level One..Four. مطابق.",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    },
+    {
+      "program_code": "MTT",
+      "certification_status": "certified_100",
+      "mobile_plan_display_status": "show_full_plan",
+      "reason": "36=36 (عربي)، فصول سنتان. مطابق (مصدر مقتضب).",
+      "official_total_credits": 36,
+      "api_total_credits": 36,
+      "plan_credit_sum": 36,
+      "levels": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "special_semantics": {
+        "common_first_year": false,
+        "english_foundation": false,
+        "step_exemption_possible": false,
+        "elective_pool": false,
+        "not_counted_in_gpa": false,
+        "auto_scheduled_first_year": false
+      },
+      "required_mobile_rule": "none",
+      "required_catalog_patch": "none",
+      "can_appear_in_onboarding": true,
+      "can_show_plan_map": true,
+      "can_use_for_smart_registration": "out_of_scope_v1_masters"
+    }
+  ]
+}

@@ -21,7 +21,14 @@ from app.banner_client import (BannerUnavailable, discover_terms, bind_term,
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
 TERM_CODE = "202550"
-MIN_ROWS  = 350
+
+# Completeness is judged by Banner's OWN totalCount, not a blind floor. A pull is complete
+# iff we fetched every page Banner advertised (fetched == totalCount == distinct CRNs) and
+# totalCount > 0. A legitimately shrinking term (e.g. summer: 243 sections) must pass.
+# The old absolute MIN_ROWS=350 floor wrongly rejected the real summer term — removed as a
+# blocker. A large drop vs the last successful sync is surfaced as a NON-BLOCKING warning so
+# a human notices a possible Banner glitch, without freezing the data.
+BASELINE_DROP_WARN_PCT = 40   # warn (do not block) if section count falls >=40% vs last good sync
 
 
 def log(m): print(m, flush=True)
@@ -67,6 +74,18 @@ def check_schema(url, key):
     return a.status_code == 200 and b.status_code == 200
 
 
+def latest_successful_total(url, key):
+    """source_total_count of the most recent COMPLETED sync run for this term — the baseline
+    for drop detection. Returns None if there is no prior successful run."""
+    with httpx.Client(timeout=30, headers=sb_headers(key)) as c:
+        r = c.get(f"{url}/rest/v1/banner_sync_runs", params={
+            "select": "source_total_count,finished_at", "term_code": f"eq.{TERM_CODE}",
+            "status": "eq.completed", "order": "finished_at.desc", "limit": "1"})
+        if r.status_code == 200 and r.json():
+            return r.json()[0].get("source_total_count")
+    return None
+
+
 def parse_envelope(normalized):
     starts, ends = [], []
     for n in normalized:
@@ -109,10 +128,15 @@ def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manua
 
     crn_csv = ",".join(sorted(live))
     with httpx.Client(timeout=60, headers=sb_headers(key, "return=representation")) as c:
+        # NOTE: term_sections has NO `updated_at` column. Writing it made PostgREST reject the
+        # whole PATCH (400, error 42703) -> reconciliation silently no-op'd (not_seen=0) on every
+        # run, which is why phantom sections accumulated as active. Use last_checked_at (exists).
         r = c.patch(f"{url}/rest/v1/term_sections",
                     params={"term_code": f"eq.{TERM_CODE}", "sync_status": "eq.active", "crn": f"not.in.({crn_csv})"},
-                    json={"sync_status": "not_seen", "is_active": False, "updated_at": now})
-        not_seen = len(r.json()) if r.status_code in (200, 206) else 0
+                    json={"sync_status": "not_seen", "is_active": False, "last_checked_at": now})
+        if r.status_code not in (200, 206):
+            raise SystemExit(f"STOP: reconciliation PATCH {r.status_code}: {r.text[:200]}")
+        not_seen = len(r.json())
 
     s, e = parse_envelope(normalized)
     cfg = {"instruction_dates_source": "banner_sync", "instruction_dates_verified_at": now,
@@ -169,20 +193,40 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
     missing = [n["crn"] for n in normalized if not n["subject_course"] or not n["course_name"] or n["capacity"] is None]
     url, key = load_supabase_env()
     supa = fetch_supabase_current(url, key)
+
+    # Completeness CONTRACT (not a blind floor): the snapshot is trustworthy iff Banner's own
+    # totalCount is positive and we fetched every advertised row with no duplicate CRNs.
+    #   - fetched < totalCount  -> partial pull (pagination cut off / session redirect) -> REJECT
+    #   - fetched == totalCount == distinct, totalCount > 0 -> COMPLETE (accept, even if 243)
+    complete_pull = (total is not None and total > 0 and total == len(rows) == len(distinct))
     guards = {
         "term==202550": term_ok,
-        "total==rows==distinct": (total == len(rows) == len(distinct)),
-        "rows>=350": len(rows) >= MIN_ROWS,
+        "complete_pull(rows==total==distinct, total>0)": complete_pull,
         "no_dup_crns": len(dups) == 0,
         "no_missing_critical_fields": len(missing) == 0,
         "schema_present": check_schema(url, key),
     }
+
+    # Baseline drop is a WARNING, never a blocker — a real term shrink must still apply.
+    baseline = latest_successful_total(url, key)
+    warnings = []
+    drop_pct = None
+    if baseline and baseline > 0 and total is not None:
+        drop_pct = round((baseline - total) / baseline * 100, 1)
+        if drop_pct >= BASELINE_DROP_WARN_PCT:
+            warnings.append(f"section_count_drop: baseline={baseline} -> total={total} ({drop_pct}% fewer)")
+
+    would_not_seen = len([crn for crn in supa
+                          if supa[crn].get("sync_status") == "active" and crn not in distinct])
     if not all(guards.values()):
-        return {"ok": False, "reason": "guard_failed", "guards": guards, "total": total, "rows": len(rows)}
+        return {"ok": False, "reason": "guard_failed", "guards": guards,
+                "total": total, "rows": len(rows), "warnings": warnings, "baseline": baseline}
     if not apply:
         return {"ok": True, "reason": "dry_run", "total": total, "rows": len(rows),
+                "guards": guards, "warnings": warnings, "baseline": baseline, "drop_pct": drop_pct,
                 "would_add": len([n for n in normalized if n["crn"] not in supa]),
-                "would_update": len([n for n in normalized if n["crn"] in supa])}
+                "would_update": len([n for n in normalized if n["crn"] in supa]),
+                "would_mark_not_seen": would_not_seen}
     if _running_lock_held(url, key, TERM_CODE, stale_lock_seconds):
         return {"ok": False, "reason": "locked"}
     run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok, trigger=trigger)

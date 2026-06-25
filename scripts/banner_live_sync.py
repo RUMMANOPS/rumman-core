@@ -156,6 +156,20 @@ def parse_envelope(normalized):
     return s, e
 
 
+def _record_sync_failure(url, key, term_code, trigger, reason, error_text, total=None):
+    """Best-effort: write a failed banner_sync_runs row for pre-apply failures. Never raises."""
+    try:
+        now = now_iso()
+        with httpx.Client(timeout=20, headers=sb_headers(key, "return=minimal")) as c:
+            c.post(f"{url}/rest/v1/banner_sync_runs", json={
+                "tenant_id": TENANT_ID, "term_code": term_code, "status": "failed",
+                "trigger": trigger, "source_total_count": total,
+                "started_at": now, "finished_at": now,
+                "error": f"{reason}: {str(error_text)[:460]}"})
+    except Exception:
+        pass
+
+
 def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manual", term_code=None):
     if not term_code:
         raise ValueError("run_apply: term_code is required")
@@ -168,51 +182,83 @@ def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manua
         r.raise_for_status(); run_id = r.json()[0]["id"]
     log(f"  sync_run_id = {run_id}")
 
-    payload = []
-    for n in normalized:
-        cur = supa_current.get(n["crn"])
-        changed = (cur is None) or (cur.get("source_hash") != n["source_hash"])
-        rec = dict(n)
-        rec.update({"sync_status": "active", "is_active": True, "sync_run_id": run_id,
-                    "last_checked_at": now, "last_seen_at": now,
-                    "raw_changed_at": now if changed else (cur.get("raw_changed_at") if cur else now)})
-        payload.append(rec)
-    with httpx.Client(timeout=90, headers=sb_headers(key, "resolution=merge-duplicates,return=minimal")) as c:
-        for i in range(0, len(payload), 50):
-            r = c.post(f"{url}/rest/v1/term_sections?on_conflict=term_code,crn", json=payload[i:i+50])
-            if r.status_code >= 400:
-                raise SystemExit(f"STOP: upsert {r.status_code}: {r.text[:200]}")
-    added   = len([n for n in normalized if n["crn"] not in supa_current])
-    updated = len([n for n in normalized if n["crn"] in supa_current])
-
-    crn_csv = ",".join(sorted(live))
-    with httpx.Client(timeout=60, headers=sb_headers(key, "return=representation")) as c:
-        # NOTE: term_sections has NO `updated_at` column. Writing it made PostgREST reject the
-        # whole PATCH (400, error 42703) -> reconciliation silently no-op'd (not_seen=0) on every
-        # run, which is why phantom sections accumulated as active. Use last_checked_at (exists).
-        r = c.patch(f"{url}/rest/v1/term_sections",
-                    params={"term_code": f"eq.{term_code}", "sync_status": "eq.active", "crn": f"not.in.({crn_csv})"},
-                    json={"sync_status": "not_seen", "is_active": False, "last_checked_at": now})
-        if r.status_code not in (200, 206):
-            raise SystemExit(f"STOP: reconciliation PATCH {r.status_code}: {r.text[:200]}")
-        not_seen = len(r.json())
+    def _mark_run_failed(error_msg):
+        """Best-effort: flip the in-flight run to failed. Never raises."""
+        try:
+            with httpx.Client(timeout=20, headers=sb_headers(key, "return=minimal")) as c:
+                c.patch(f"{url}/rest/v1/banner_sync_runs", params={"id": f"eq.{run_id}"},
+                        json={"status": "failed", "finished_at": now_iso(),
+                              "error": str(error_msg)[:500]})
+        except Exception:
+            pass
 
     s, e = parse_envelope(normalized)
-    cfg = {"instruction_dates_source": "banner_sync", "instruction_dates_verified_at": now,
-           "last_banner_discovery_at": now, "active_term_status": "verified", "updated_at": now,
-           "last_imported_at": now}
-    if s: cfg["instruction_start_date"] = s[0].isoformat(); cfg["instruction_start_raw"] = s[1]
-    if e: cfg["instruction_end_date"]   = e[0].isoformat(); cfg["instruction_end_raw"]   = e[1]
-    with httpx.Client(timeout=30, headers=sb_headers(key, "return=minimal")) as c:
-        c.patch(f"{url}/rest/v1/app_term_config", params={"tenant_id": f"eq.{TENANT_ID}"}, json=cfg)
+    _completed = False  # flipped to True only after completion PATCH succeeds
 
-    with httpx.Client(timeout=30, headers=sb_headers(key, "return=minimal")) as c:
-        c.patch(f"{url}/rest/v1/banner_sync_runs", params={"id": f"eq.{run_id}"}, json={
-            "status": "completed", "finished_at": now_iso(), "sections_seen": len(normalized),
-            "sections_added": added, "sections_updated": updated, "sections_not_seen": not_seen,
-            "http_ok_count": http_ok, "http_error_count": 0,
-            "notes": "raw snapshot stored locally only in this run (/tmp); banner-raw bucket deferred to SYNC-1b"})
-    return run_id, added, updated, not_seen, (s, e)
+    try:
+        payload = []
+        for n in normalized:
+            cur = supa_current.get(n["crn"])
+            changed = (cur is None) or (cur.get("source_hash") != n["source_hash"])
+            rec = dict(n)
+            rec.update({"sync_status": "active", "is_active": True, "sync_run_id": run_id,
+                        "last_checked_at": now, "last_seen_at": now,
+                        "raw_changed_at": now if changed else (cur.get("raw_changed_at") if cur else now)})
+            payload.append(rec)
+        with httpx.Client(timeout=90, headers=sb_headers(key, "resolution=merge-duplicates,return=minimal")) as c:
+            for i in range(0, len(payload), 50):
+                r = c.post(f"{url}/rest/v1/term_sections?on_conflict=term_code,crn", json=payload[i:i+50])
+                if r.status_code >= 400:
+                    # NOTE: term_sections has NO `updated_at` column. Writing it made PostgREST reject the
+                    # whole PATCH (400, error 42703) -> reconciliation silently no-op'd (not_seen=0) on every
+                    # run, which is why phantom sections accumulated as active. Use last_checked_at (exists).
+                    raise RuntimeError(f"upsert failed: {r.status_code}: {r.text[:200]}")
+        added   = len([n for n in normalized if n["crn"] not in supa_current])
+        updated = len([n for n in normalized if n["crn"] in supa_current])
+
+        crn_csv = ",".join(sorted(live))
+        with httpx.Client(timeout=60, headers=sb_headers(key, "return=representation")) as c:
+            r = c.patch(f"{url}/rest/v1/term_sections",
+                        params={"term_code": f"eq.{term_code}", "sync_status": "eq.active", "crn": f"not.in.({crn_csv})"},
+                        json={"sync_status": "not_seen", "is_active": False, "last_checked_at": now})
+            if r.status_code not in (200, 206):
+                raise RuntimeError(f"reconciliation failed: {r.status_code}: {r.text[:200]}")
+            not_seen = len(r.json())
+
+        # raise_for_status() ensures a 4xx/5xx triggers _mark_run_failed — no silent zombie runs.
+        with httpx.Client(timeout=30, headers=sb_headers(key, "return=minimal")) as c:
+            r = c.patch(f"{url}/rest/v1/banner_sync_runs", params={"id": f"eq.{run_id}"}, json={
+                "status": "completed", "finished_at": now_iso(), "sections_seen": len(normalized),
+                "sections_added": added, "sections_updated": updated, "sections_not_seen": not_seen,
+                "http_ok_count": http_ok, "http_error_count": 0,
+                "notes": "raw snapshot stored locally only in this run (/tmp); banner-raw bucket deferred to SYNC-1b"})
+            r.raise_for_status()
+        _completed = True
+
+        return run_id, added, updated, not_seen, (s, e)
+
+    except Exception as exc:
+        _mark_run_failed(str(exc))
+        raise
+
+    finally:
+        # app_term_config trust markers — best-effort, only after run is confirmed completed.
+        # _completed=False means we are on the failure path — skip entirely.
+        # Failure of this PATCH is a warning, not a sync failure: term_sections and the run
+        # status are already committed. _mark_run_failed is NOT called from here.
+        if _completed:
+            cfg = {"instruction_dates_source": "banner_sync",
+                   "instruction_dates_verified_at": now_iso(),
+                   "last_banner_discovery_at": now_iso(), "active_term_status": "verified",
+                   "updated_at": now_iso(), "last_imported_at": now_iso()}
+            if s: cfg["instruction_start_date"] = s[0].isoformat(); cfg["instruction_start_raw"] = s[1]
+            if e: cfg["instruction_end_date"]   = e[0].isoformat(); cfg["instruction_end_raw"]   = e[1]
+            try:
+                with httpx.Client(timeout=30, headers=sb_headers(key, "return=minimal")) as c:
+                    c.patch(f"{url}/rest/v1/app_term_config",
+                            params={"tenant_id": f"eq.{TENANT_ID}"}, json=cfg)
+            except Exception as cfg_exc:
+                log(f"WARN: app_term_config update failed after completed run {run_id}: {str(cfg_exc)[:120]}")
 
 
 def _running_lock_held(url, key, term, stale_seconds):
@@ -251,6 +297,7 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
         finally:
             c.close()
     except BannerUnavailable as exc:
+        _record_sync_failure(url, key, term_code, trigger, "banner_unavailable", str(exc)[:160])
         return {"ok": False, "reason": "banner_unavailable", "error": str(exc)[:160]}
 
     crns = [str(r.get("courseReferenceNumber")) for r in rows]
@@ -285,6 +332,10 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
     would_not_seen = len([crn for crn in supa
                           if supa[crn].get("sync_status") == "active" and crn not in distinct])
     if not all(guards.values()):
+        failed_guards = [k for k, v in guards.items() if not v]
+        _record_sync_failure(url, key, term_code, trigger, "guard_failed",
+                             f"failed_guards={failed_guards} total={total} rows={len(rows)}",
+                             total=total)
         return {"ok": False, "reason": "guard_failed", "guards": guards,
                 "total": total, "rows": len(rows), "warnings": warnings, "baseline": baseline,
                 "term_code": term_code, "term_source": term_source}
@@ -297,8 +348,13 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
                 "term_code": term_code, "term_source": term_source}
     if _running_lock_held(url, key, term_code, stale_lock_seconds):
         return {"ok": False, "reason": "locked"}
-    run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok,
-                                                      trigger=trigger, term_code=term_code)
+    try:
+        run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok,
+                                                          trigger=trigger, term_code=term_code)
+    except Exception as exc:
+        # run_apply already called _mark_run_failed before re-raising; just surface the error.
+        return {"ok": False, "reason": "apply_exception", "error": str(exc)[:200],
+                "term_code": term_code, "term_source": term_source}
     return {"ok": True, "reason": "applied", "run_id": run_id, "added": added, "updated": updated,
             "not_seen": not_seen, "total": total, "term_code": term_code, "term_source": term_source,
             "instruction_envelope": [env[0][1] if env[0] else None, env[1][1] if env[1] else None]}

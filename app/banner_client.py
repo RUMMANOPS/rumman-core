@@ -70,10 +70,13 @@ def compute_hash(row):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
-def normalize_section(section, default_term="202550"):
+def normalize_section(section, default_term=None):
     meetings = build_class_meetings(section)
+    term_code = str(section.get("term") or default_term or "")
+    if not term_code:
+        raise ValueError(f"normalize_section: no term_code for CRN {section.get('courseReferenceNumber')}")
     row = {
-        "tenant_id": TENANT_ID, "term_code": str(section.get("term") or default_term),
+        "tenant_id": TENANT_ID, "term_code": term_code,
         "crn": str(section.get("courseReferenceNumber")),
         "subject_course": section.get("subjectCourse"), "course_name": section.get("courseTitle"),
         "credit_hours": section.get("creditHourLow") or section.get("creditHours") or section.get("creditHourHigh"),

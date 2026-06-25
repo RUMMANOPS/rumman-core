@@ -2,12 +2,15 @@
 """
 banner_live_sync.py — BANNER-SYNC-1
 
-Full anonymous sync of SEU Banner summer sections -> term_sections
+Full anonymous sync of SEU Banner sections -> term_sections
 (one row per (term_code, crn); meetings inside class_meetings JSONB).
 
 Shared Banner logic (session, fetch, normalize, hash) lives in app/banner_client.py.
 Default = dry-run (no DB writes). With --apply, performs ONE guarded sync:
 all guards must pass before any write; missing sections -> sync_status='not_seen' (never deleted).
+
+Active term is read dynamically from app_term_config.active_term_code (Supabase),
+with BANNER_TERM_CODE env as fallback. No hardcoded term code.
 """
 import argparse, json, sys, hashlib, os
 from datetime import datetime, timezone, timedelta
@@ -20,7 +23,6 @@ from app.banner_client import (BannerUnavailable, discover_terms, bind_term,
                                fetch_all_sections, normalize_section)
 
 TENANT_ID = "00000000-0000-0000-0000-000000000001"
-TERM_CODE = "202550"
 
 # Completeness is judged by Banner's OWN totalCount, not a blind floor. A pull is complete
 # iff we fetched every page Banner advertised (fetched == totalCount == distinct CRNs) and
@@ -52,17 +54,72 @@ def load_supabase_env():
     return url, key
 
 
+def resolve_term_code(url, key):
+    """Resolve the active Banner term code.
+
+    Returns a dict — always one of:
+      {"ok": True,  "term_code": "<code>", "source": "app_term_config"}
+      {"ok": True,  "term_code": "<code>", "source": "env"}
+      {"ok": False, "reason": "active_term_read_failed", "error": "<detail>"}
+      {"ok": False, "reason": "no_active_term"}
+
+    Env fallback (BANNER_TERM_CODE) is ONLY used when:
+      - DB is reachable and the query succeeded, but active_term_code is not set, OR
+      - No DB credentials available at all (local/dev environment).
+    If the DB read fails for any reason (network, timeout, HTTP error, malformed JSON),
+    we return active_term_read_failed and the caller MUST abort — we never fall through
+    to a potentially stale env var.
+    """
+    if url and key:
+        # --- attempt DB read ---
+        try:
+            with httpx.Client(timeout=15, headers=sb_headers(key)) as c:
+                r = c.get(f"{url}/rest/v1/app_term_config",
+                          params={"select": "active_term_code",
+                                  "tenant_id": f"eq.{TENANT_ID}",
+                                  "limit": "1"})
+        except Exception as exc:
+            return {"ok": False, "reason": "active_term_read_failed",
+                    "error": f"network/timeout: {str(exc)[:160]}"}
+
+        if r.status_code != 200:
+            return {"ok": False, "reason": "active_term_read_failed",
+                    "error": f"HTTP {r.status_code}: {r.text[:160]}"}
+
+        try:
+            rows = r.json()
+        except Exception as exc:
+            return {"ok": False, "reason": "active_term_read_failed",
+                    "error": f"malformed response: {str(exc)[:160]}"}
+
+        if rows and rows[0].get("active_term_code"):
+            return {"ok": True, "term_code": str(rows[0]["active_term_code"]).strip(),
+                    "source": "app_term_config"}
+
+        # DB readable but active_term_code not set — env fallback allowed
+        env_code = os.environ.get("BANNER_TERM_CODE", "").strip()
+        if env_code:
+            return {"ok": True, "term_code": env_code, "source": "env"}
+        return {"ok": False, "reason": "no_active_term"}
+
+    # No DB credentials — local/dev only; env fallback allowed
+    env_code = os.environ.get("BANNER_TERM_CODE", "").strip()
+    if env_code:
+        return {"ok": True, "term_code": env_code, "source": "env"}
+    return {"ok": False, "reason": "no_active_term"}
+
+
 def sb_headers(key, prefer=None):
     h = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
     if prefer: h["Prefer"] = prefer
     return h
 
 
-def fetch_supabase_current(url, key):
+def fetch_supabase_current(url, key, term_code):
     with httpx.Client(timeout=30, headers=sb_headers(key)) as c:
         r = c.get(f"{url}/rest/v1/term_sections",
                   params={"select": "crn,sync_status,source_hash,raw_changed_at",
-                          "term_code": f"eq.{TERM_CODE}", "limit": "2000"})
+                          "term_code": f"eq.{term_code}", "limit": "2000"})
         r.raise_for_status()
         return {str(x["crn"]): x for x in r.json()}
 
@@ -74,12 +131,12 @@ def check_schema(url, key):
     return a.status_code == 200 and b.status_code == 200
 
 
-def latest_successful_total(url, key):
+def latest_successful_total(url, key, term_code):
     """source_total_count of the most recent COMPLETED sync run for this term — the baseline
     for drop detection. Returns None if there is no prior successful run."""
     with httpx.Client(timeout=30, headers=sb_headers(key)) as c:
         r = c.get(f"{url}/rest/v1/banner_sync_runs", params={
-            "select": "source_total_count,finished_at", "term_code": f"eq.{TERM_CODE}",
+            "select": "source_total_count,finished_at", "term_code": f"eq.{term_code}",
             "status": "eq.completed", "order": "finished_at.desc", "limit": "1"})
         if r.status_code == 200 and r.json():
             return r.json()[0].get("source_total_count")
@@ -99,12 +156,14 @@ def parse_envelope(normalized):
     return s, e
 
 
-def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manual"):
+def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manual", term_code=None):
+    if not term_code:
+        raise ValueError("run_apply: term_code is required")
     now = now_iso()
     live = {n["crn"] for n in normalized}
     with httpx.Client(timeout=30, headers=sb_headers(key, "return=representation")) as c:
         r = c.post(f"{url}/rest/v1/banner_sync_runs", json={
-            "tenant_id": TENANT_ID, "term_code": TERM_CODE, "status": "running",
+            "tenant_id": TENANT_ID, "term_code": term_code, "status": "running",
             "trigger": trigger, "source_total_count": total, "started_at": now})
         r.raise_for_status(); run_id = r.json()[0]["id"]
     log(f"  sync_run_id = {run_id}")
@@ -132,7 +191,7 @@ def run_apply(url, key, normalized, supa_current, total, http_ok, trigger="manua
         # whole PATCH (400, error 42703) -> reconciliation silently no-op'd (not_seen=0) on every
         # run, which is why phantom sections accumulated as active. Use last_checked_at (exists).
         r = c.patch(f"{url}/rest/v1/term_sections",
-                    params={"term_code": f"eq.{TERM_CODE}", "sync_status": "eq.active", "crn": f"not.in.({crn_csv})"},
+                    params={"term_code": f"eq.{term_code}", "sync_status": "eq.active", "crn": f"not.in.({crn_csv})"},
                     json={"sync_status": "not_seen", "is_active": False, "last_checked_at": now})
         if r.status_code not in (200, 206):
             raise SystemExit(f"STOP: reconciliation PATCH {r.status_code}: {r.text[:200]}")
@@ -170,17 +229,25 @@ def _running_lock_held(url, key, term, stale_seconds):
 
 def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
     """One guarded sync cycle. Shared by the CLI (--apply) and app/banner_sync_worker.py.
-    Returns a result dict; never raises (Banner failure -> {'ok': False, 'reason': 'banner_unavailable'})."""
-    usid = "rmnsync" + hashlib.md5(TERM_CODE.encode()).hexdigest()[:8]
+    Returns a result dict; never raises (Banner failure -> {'ok': False, 'reason': 'banner_unavailable'}).
+    Active term is resolved via resolve_term_code — DB failure aborts immediately, no env fallback."""
+    url, key = load_supabase_env()
+    term_result = resolve_term_code(url, key)
+    if not term_result["ok"]:
+        return {"ok": False, "reason": term_result["reason"],
+                "error": term_result.get("error", "No active Banner term configured")}
+    term_code = term_result["term_code"]
+    term_source = term_result["source"]
+
+    usid = "rmnsync" + hashlib.md5(term_code.encode()).hexdigest()[:8]
     try:
         c = banner_client._open_session()
         try:
             terms = discover_terms(c)
             tmap = {t.get("code"): t.get("description") for t in terms}
-            summer = tmap.get(TERM_CODE)
-            term_ok = bool(summer and "summer" in summer.lower())
-            bind_term(c, TERM_CODE, usid)
-            rows, total, http_ok = fetch_all_sections(c, TERM_CODE, usid)
+            term_in_banner = term_code in tmap
+            bind_term(c, term_code, usid)
+            rows, total, http_ok = fetch_all_sections(c, term_code, usid)
         finally:
             c.close()
     except BannerUnavailable as exc:
@@ -189,18 +256,17 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
     crns = [str(r.get("courseReferenceNumber")) for r in rows]
     distinct = set(crns)
     dups = [x for x in distinct if crns.count(x) > 1]
-    normalized = [normalize_section(s, default_term=TERM_CODE) for s in rows]
+    normalized = [normalize_section(s, default_term=term_code) for s in rows]
     missing = [n["crn"] for n in normalized if not n["subject_course"] or not n["course_name"] or n["capacity"] is None]
-    url, key = load_supabase_env()
-    supa = fetch_supabase_current(url, key)
+    supa = fetch_supabase_current(url, key, term_code)
 
     # Completeness CONTRACT (not a blind floor): the snapshot is trustworthy iff Banner's own
     # totalCount is positive and we fetched every advertised row with no duplicate CRNs.
     #   - fetched < totalCount  -> partial pull (pagination cut off / session redirect) -> REJECT
-    #   - fetched == totalCount == distinct, totalCount > 0 -> COMPLETE (accept, even if 243)
+    #   - fetched == totalCount == distinct, totalCount > 0 -> COMPLETE
     complete_pull = (total is not None and total > 0 and total == len(rows) == len(distinct))
     guards = {
-        "term==202550": term_ok,
+        "term_in_banner": term_in_banner,
         "complete_pull(rows==total==distinct, total>0)": complete_pull,
         "no_dup_crns": len(dups) == 0,
         "no_missing_critical_fields": len(missing) == 0,
@@ -208,7 +274,7 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
     }
 
     # Baseline drop is a WARNING, never a blocker — a real term shrink must still apply.
-    baseline = latest_successful_total(url, key)
+    baseline = latest_successful_total(url, key, term_code)
     warnings = []
     drop_pct = None
     if baseline and baseline > 0 and total is not None:
@@ -220,18 +286,21 @@ def run_sync_once(apply=False, trigger="scheduled", stale_lock_seconds=600):
                           if supa[crn].get("sync_status") == "active" and crn not in distinct])
     if not all(guards.values()):
         return {"ok": False, "reason": "guard_failed", "guards": guards,
-                "total": total, "rows": len(rows), "warnings": warnings, "baseline": baseline}
+                "total": total, "rows": len(rows), "warnings": warnings, "baseline": baseline,
+                "term_code": term_code, "term_source": term_source}
     if not apply:
         return {"ok": True, "reason": "dry_run", "total": total, "rows": len(rows),
                 "guards": guards, "warnings": warnings, "baseline": baseline, "drop_pct": drop_pct,
                 "would_add": len([n for n in normalized if n["crn"] not in supa]),
                 "would_update": len([n for n in normalized if n["crn"] in supa]),
-                "would_mark_not_seen": would_not_seen}
-    if _running_lock_held(url, key, TERM_CODE, stale_lock_seconds):
+                "would_mark_not_seen": would_not_seen,
+                "term_code": term_code, "term_source": term_source}
+    if _running_lock_held(url, key, term_code, stale_lock_seconds):
         return {"ok": False, "reason": "locked"}
-    run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok, trigger=trigger)
+    run_id, added, updated, not_seen, env = run_apply(url, key, normalized, supa, total, http_ok,
+                                                      trigger=trigger, term_code=term_code)
     return {"ok": True, "reason": "applied", "run_id": run_id, "added": added, "updated": updated,
-            "not_seen": not_seen, "total": total,
+            "not_seen": not_seen, "total": total, "term_code": term_code, "term_source": term_source,
             "instruction_envelope": [env[0][1] if env[0] else None, env[1][1] if env[1] else None]}
 
 

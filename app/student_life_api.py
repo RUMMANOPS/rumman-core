@@ -106,28 +106,34 @@ def _days_from_now(n: int) -> str:
 # ---------------------------------------------------------------------------
 
 class TaskCreate(BaseModel):
-    title:          str                = Field(..., min_length=1, max_length=500)
-    task_type:      str                = "personal"
-    priority:       int                = Field(default=2, ge=1, le=3)
-    due_at:         Optional[str]      = None
-    opens_at:       Optional[str]      = None
-    closes_at:      Optional[str]      = None
-    course_code:    Optional[str]      = None
-    notes:          Optional[str]      = None
-    remind_at:      Optional[str]      = None
-    exam_date:      Optional[str]      = None
+    title:            str                = Field(..., min_length=1, max_length=500)
+    task_type:        str                = "personal"
+    priority:         int                = Field(default=2, ge=1, le=3)
+    due_at:           Optional[str]      = None
+    opens_at:         Optional[str]      = None
+    closes_at:        Optional[str]      = None
+    course_code:      Optional[str]      = None
+    section_crn:      Optional[str]      = None
+    custom_task_type: Optional[str]      = None
+    notes:            Optional[str]      = None
+    remind_at:        Optional[str]      = None
+    exam_date:        Optional[str]      = None
 
 
 class TaskUpdate(BaseModel):
-    status:         Optional[str]      = None
-    title:          Optional[str]      = None
-    priority:       Optional[int]      = None
-    due_at:         Optional[str]      = None
-    opens_at:       Optional[str]      = None
-    closes_at:      Optional[str]      = None
-    snoozed_until:  Optional[str]      = None
-    notes:          Optional[str]      = None
-    acted_on_at:    Optional[str]      = None
+    status:           Optional[str]      = None
+    title:            Optional[str]      = None
+    task_type:        Optional[str]      = None
+    priority:         Optional[int]      = None
+    due_at:           Optional[str]      = None
+    opens_at:         Optional[str]      = None
+    closes_at:        Optional[str]      = None
+    course_code:      Optional[str]      = None
+    section_crn:      Optional[str]      = None
+    custom_task_type: Optional[str]      = None
+    snoozed_until:    Optional[str]      = None
+    notes:            Optional[str]      = None
+    acted_on_at:      Optional[str]      = None
 
 
 class RequestStart(BaseModel):
@@ -1193,13 +1199,15 @@ async def create_task(student_id: str, body: TaskCreate):
         "task_type":   body.task_type,
         "priority":    body.priority,
     }
-    if body.due_at:        payload["due_at"]       = body.due_at
-    if body.opens_at:      payload["opens_at"]     = body.opens_at
-    if body.closes_at:     payload["closes_at"]    = body.closes_at
-    if body.course_code:   payload["course_code"]  = body.course_code
-    if body.notes:         payload["notes"]        = body.notes
-    if body.remind_at:     payload["remind_at"]    = body.remind_at
-    if body.exam_date:     payload["exam_date"]    = body.exam_date
+    if body.due_at:           payload["due_at"]           = body.due_at
+    if body.opens_at:         payload["opens_at"]         = body.opens_at
+    if body.closes_at:        payload["closes_at"]        = body.closes_at
+    if body.course_code:      payload["course_code"]      = body.course_code
+    if body.section_crn:      payload["section_crn"]      = body.section_crn
+    if body.custom_task_type: payload["custom_task_type"] = body.custom_task_type
+    if body.notes:            payload["notes"]            = body.notes
+    if body.remind_at:        payload["remind_at"]        = body.remind_at
+    if body.exam_date:        payload["exam_date"]        = body.exam_date
 
     async with _db() as db:
         return await _post(db, "student_tasks", payload)
@@ -1212,14 +1220,19 @@ async def update_task(student_id: str, task_id: str, body: TaskUpdate):
         payload["status"] = body.status
         if body.status == "done":
             payload["acted_on_at"] = _now_iso()
-    if body.title is not None:          payload["title"]        = body.title
-    if body.priority is not None:       payload["priority"]     = body.priority
-    if body.due_at is not None:         payload["due_at"]       = body.due_at
-    if body.opens_at is not None:       payload["opens_at"]     = body.opens_at
-    if body.closes_at is not None:      payload["closes_at"]    = body.closes_at
-    if body.snoozed_until is not None:  payload["snoozed_until"] = body.snoozed_until
-    if body.notes is not None:          payload["notes"]        = body.notes
-    if body.acted_on_at is not None:    payload["acted_on_at"]  = body.acted_on_at
+    if body.title is not None:            payload["title"]            = body.title
+    if body.task_type is not None:        payload["task_type"]        = body.task_type
+    if body.priority is not None:         payload["priority"]         = body.priority
+    if body.due_at is not None:           payload["due_at"]           = body.due_at
+    if body.opens_at is not None:         payload["opens_at"]         = body.opens_at
+    if body.closes_at is not None:        payload["closes_at"]        = body.closes_at
+    # Nullable context fields: an empty string from the client clears them (→ NULL).
+    if body.course_code is not None:      payload["course_code"]      = body.course_code or None
+    if body.section_crn is not None:      payload["section_crn"]      = body.section_crn or None
+    if body.custom_task_type is not None: payload["custom_task_type"] = body.custom_task_type or None
+    if body.snoozed_until is not None:    payload["snoozed_until"]    = body.snoozed_until
+    if body.notes is not None:            payload["notes"]            = body.notes
+    if body.acted_on_at is not None:      payload["acted_on_at"]      = body.acted_on_at
 
     async with _db() as db:
         rows = await _patch(db, "student_tasks",
